@@ -1,0 +1,5 @@
+.env
+pipeline.log
+*.csv
+__pycache__/
+credentials/
