@@ -14,9 +14,10 @@ import httpx
 
 logger = logging.getLogger("tase_pipeline")
 
-_base_url: str = ""
-_api_key:  str = ""
-_table:    str = "tase_putcall"
+_base_url:      str = ""
+_api_key:       str = ""
+_table:         str = "tase_putcall"
+_history_table: str = "tase_putcall_history"
 
 BATCH_SIZE = 50  # rows per POST request
 
@@ -41,9 +42,10 @@ VALID_COLUMNS = {
 
 def _init():
     global _base_url, _api_key, _table
-    _base_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    _api_key  = os.environ.get("SUPABASE_KEY", "")
-    _table    = os.environ.get("SUPABASE_TABLE", "tase_putcall")
+    _base_url      = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    _api_key       = os.environ.get("SUPABASE_KEY", "")
+    _table         = os.environ.get("SUPABASE_TABLE", "tase_putcall")
+    _history_table = os.environ.get("SUPABASE_HISTORY_TABLE", "tase_putcall_history")
     if not _base_url or not _api_key:
         raise RuntimeError(
             "SUPABASE_URL and SUPABASE_KEY environment variables must be set"
@@ -190,3 +192,67 @@ def upsert_no_trading(fetch_date: str, fetch_time: str,
     except Exception as e:
         logger.warning("Supabase no-trading error: %s", e)
     return False
+
+
+# ------------------------------------------------------------------
+def copy_to_history(max_retries: int = 3) -> bool:
+    """
+    Copy all rows from the live table to the history table.
+    Called at the last cycle of each trading day.
+    """
+    _ensure_init()
+
+    # 1. Read all rows from live table
+    read_url = f"{_base_url}/rest/v1/{_table}?select=*"
+    try:
+        r = httpx.get(read_url, headers=_headers(), timeout=30)
+        if r.status_code not in (200, 206):
+            logger.error("History read failed: %d", r.status_code)
+            return False
+        rows = r.json()
+    except Exception as e:
+        logger.error("History read error: %s", e)
+        return False
+
+    if not rows:
+        logger.info("No rows to copy to history")
+        return True
+
+    # 2. Remove 'id' and 'fetched_at' so history table generates its own
+    for row in rows:
+        row.pop("id", None)
+        row.pop("fetched_at", None)
+
+    # 3. Insert into history table in batches
+    write_url = f"{_base_url}/rest/v1/{_history_table}"
+    total_ok = 0
+
+    for i in range(0, len(rows), BATCH_SIZE):
+        batch = rows[i : i + BATCH_SIZE]
+        payload = json.dumps(batch, ensure_ascii=False)
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                r = httpx.post(write_url, headers=_headers(),
+                               content=payload, timeout=30)
+                if r.status_code in (200, 201, 204):
+                    total_ok += len(batch)
+                    break
+                logger.warning(
+                    "History batch %d-%d: %d (attempt %d/%d): %s",
+                    i, i + len(batch), r.status_code,
+                    attempt, max_retries, r.text[:200],
+                )
+            except Exception as e:
+                logger.warning(
+                    "History batch error (attempt %d/%d): %s",
+                    attempt, max_retries, e,
+                )
+            _time.sleep(2 ** attempt)
+
+    if total_ok == len(rows):
+        logger.info("History save OK: %d rows copied", total_ok)
+        return True
+    else:
+        logger.error("History save partial: %d/%d rows", total_ok, len(rows))
+        return False

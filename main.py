@@ -317,6 +317,12 @@ def run_cycle(page, cycle_time: datetime):
     return success_count > 0
 
 
+def is_last_cycle(now: datetime) -> bool:
+    """Check if the next cycle would be outside trading hours."""
+    next_cycle = now + timedelta(seconds=FETCH_INTERVAL)
+    return next_cycle.time() > MARKET_CLOSE
+
+
 # ------------------------------------------------------------------
 # Main loop
 # ------------------------------------------------------------------
@@ -365,6 +371,9 @@ def main():
             logger.info("Cycle start: %s", now.strftime("%Y-%m-%d %H:%M"))
             try:
                 ok = run_cycle(page, now)
+                if ok and is_last_cycle(now):
+                    logger.info("*** Last cycle of the day — saving to history ***")
+                    db.copy_to_history()
                 if not ok:
                     logger.warning("Cycle empty — recovering session")
                     browser, context, page = recover_session(
