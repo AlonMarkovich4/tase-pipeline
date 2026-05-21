@@ -112,3 +112,53 @@ CREATE TABLE tase_putcall_history (
 
 CREATE INDEX idx_history_fetch_date  ON tase_putcall_history (fetch_date);
 CREATE INDEX idx_history_expiry_date ON tase_putcall_history (expiry_date);
+
+-- =============================================================
+-- Iron Condor strategies: Monday 12:00 PM trigger
+-- =============================================================
+
+CREATE TABLE iron_condor_strategies (
+    id                      BIGSERIAL PRIMARY KEY,
+    trigger_date            TEXT,
+    trigger_time            TEXT,
+    base_index_value        NUMERIC,
+    expiry_date             TEXT,
+    expiry_day_name         TEXT,
+    interval_pct            NUMERIC,
+
+    short_call_strike       NUMERIC,
+    long_call_strike        NUMERIC,
+    short_put_strike        NUMERIC,
+    long_put_strike         NUMERIC,
+
+    short_call_id           TEXT,
+    long_call_id            TEXT,
+    short_put_id            TEXT,
+    long_put_id             TEXT,
+
+    short_call_price        NUMERIC,
+    long_call_price         NUMERIC,
+    short_put_price         NUMERIC,
+    long_put_price          NUMERIC,
+
+    short_call_delta        NUMERIC,
+    short_put_delta         NUMERIC,
+    long_call_delta         NUMERIC,
+    long_put_delta          NUMERIC,
+
+    total_net_premium       NUMERIC,
+    max_profit_ils          NUMERIC,
+    max_risk_ils            NUMERIC,
+    risk_reward_ratio       NUMERIC,
+
+    breakeven_upper         NUMERIC,
+    breakeven_lower         NUMERIC,
+    days_to_expiry          INTEGER,
+    wing_width              NUMERIC DEFAULT 20,
+
+    status                  TEXT DEFAULT 'calculated',
+    created_at              TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_ic_trigger_date ON iron_condor_strategies (trigger_date);
+CREATE INDEX idx_ic_expiry_date ON iron_condor_strategies (expiry_date);

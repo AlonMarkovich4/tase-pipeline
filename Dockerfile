@@ -17,6 +17,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install Playwright Chromium browser
 RUN playwright install chromium
 
-COPY main.py database.py ./
+COPY main.py database.py strategy_engine.py ./
 
 CMD ["python", "main.py"]

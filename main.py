@@ -22,6 +22,7 @@ import pandas as pd
 from playwright.sync_api import sync_playwright
 
 import database as db
+import strategy_engine
 
 # ------------------------------------------------------------------
 # Config
@@ -31,6 +32,7 @@ FETCH_INTERVAL  = int(os.environ.get("FETCH_INTERVAL_MINUTES", "15")) * 60
 PAGE_TIMEOUT    = 45_000
 RENDER_WAIT     = 6
 BROWSER_RESTART = 6 * 3600  # restart browser every 6h
+STRATEGY_TRIGGER = dt_time(12, 0)  # Monday 12:00 PM
 
 API_URL    = "https://api.tase.co.il/api/derivatives/putvscall"
 EXPIRY_URL = "https://api.tase.co.il/api/derivatives/fltrputvscallexpdates"
@@ -338,6 +340,7 @@ def main():
         sys.exit(1)
 
     browser_born = time.monotonic()
+    strategy_triggered_today = False  # prevent multiple triggers
 
     with sync_playwright() as pw:
         browser, context, page = launch_browser(pw)
@@ -369,8 +372,24 @@ def main():
 
             logger.info("-" * 50)
             logger.info("Cycle start: %s", now.strftime("%Y-%m-%d %H:%M"))
+            # Reset strategy flag at start of each day
+            if now.time() < dt_time(9, 45):
+                strategy_triggered_today = False
+
             try:
                 ok = run_cycle(page, now)
+
+                # Monday 12:00 strategy trigger
+                if (ok and now.weekday() == 0
+                        and now.time() >= STRATEGY_TRIGGER
+                        and not strategy_triggered_today):
+                    logger.info("*** Monday 12:00 — triggering Iron Condor strategy ***")
+                    try:
+                        strategy_engine.run_strategy()
+                        strategy_triggered_today = True
+                    except Exception as se:
+                        logger.error("Strategy engine error: %s", se, exc_info=True)
+
                 if ok and is_last_cycle(now):
                     logger.info("*** Last cycle of the day — saving to history ***")
                     db.copy_to_history()
