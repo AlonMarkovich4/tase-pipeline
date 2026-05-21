@@ -107,13 +107,10 @@ def upsert_items(fetch_date: str, fetch_time: str,
                  items: list, max_retries: int = 3) -> bool:
     """
     Insert each option as its own row. Sends in batches.
-    Clears all previous data first (only keep latest snapshot).
+    Does NOT clear the table — call clear_table() once before the loop.
     """
     _ensure_init()
     url = f"{_base_url}/rest/v1/{_table}"
-
-    # Delete ALL previous data
-    _clear_table()
 
     rows = []
     for item in items:

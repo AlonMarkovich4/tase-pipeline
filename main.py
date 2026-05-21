@@ -293,6 +293,9 @@ def run_cycle(page, cycle_time: datetime):
     logger.info("Expiry dates: %s",
                 [d.isoformat() for d in expiry_dates])
 
+    # Clear table ONCE before writing all expiry dates
+    db._clear_table()
+
     success_count = 0
 
     for idx, exp_date in enumerate(expiry_dates):
