@@ -17,6 +17,7 @@ from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
+import telegram_bot
 
 logger = logging.getLogger("tase_pipeline")
 
@@ -296,8 +297,173 @@ def run_strategy():
     # 6. Save to Supabase
     if all_strategies:
         _save_strategies(all_strategies)
+        telegram_bot.alert_strategy_launch(len(all_strategies), future_expiries)
 
     logger.info("IRON CONDOR STRATEGY ENGINE — DONE (%d variations)",
                 len(all_strategies))
     logger.info("=" * 50)
     return True
+
+
+# ------------------------------------------------------------------
+# P&L Settlement — called on expiry days at market close
+# ------------------------------------------------------------------
+
+def settle_expiry(expiry_date_iso: str):
+    """
+    Check actual index close against all strategies for this expiry date.
+    Update each strategy with actual P&L and result status.
+    """
+    _init()
+
+    logger.info("=" * 50)
+    logger.info("SETTLEMENT ENGINE — %s", expiry_date_iso)
+
+    # 1. Get current index value from live data
+    rows = _read_live_data()
+    if not rows:
+        logger.error("Settlement: no live data — aborting")
+        return False
+
+    index_close = _get_base_index(rows)
+    if index_close <= 0:
+        logger.error("Settlement: could not get index close — aborting")
+        return False
+
+    logger.info("Index close: %.2f", index_close)
+
+    # 2. Read all strategies for this expiry date
+    url = (
+        f"{_base_url}/rest/v1/iron_condor_strategies"
+        f"?expiry_date=eq.{expiry_date_iso}"
+        f"&result_status=is.null"
+        f"&select=*"
+    )
+    try:
+        r = httpx.get(url, headers=_headers(), timeout=30)
+        if r.status_code not in (200, 206):
+            logger.error("Settlement: read strategies failed: %d", r.status_code)
+            return False
+        strategies = r.json()
+    except Exception as e:
+        logger.error("Settlement: read error: %s", e)
+        return False
+
+    if not strategies:
+        logger.info("Settlement: no unsettled strategies for %s", expiry_date_iso)
+        return True
+
+    logger.info("Settling %d strategies...", len(strategies))
+
+    # 3. Calculate actual P&L for each strategy
+    update_url = f"{_base_url}/rest/v1/iron_condor_strategies"
+    settled = 0
+
+    for s in strategies:
+        short_put  = _clean_numeric(s.get("short_put_strike"))
+        long_put   = _clean_numeric(s.get("long_put_strike"))
+        short_call = _clean_numeric(s.get("short_call_strike"))
+        long_call  = _clean_numeric(s.get("long_call_strike"))
+        net_premium = _clean_numeric(s.get("total_net_premium"))
+
+        # Determine result
+        if short_put <= index_close <= short_call:
+            # Index inside short strikes — max profit
+            pnl_points = net_premium
+            status = "max_profit"
+
+        elif long_put <= index_close < short_put:
+            # Index between long put and short put — partial loss on put side
+            intrusion = short_put - index_close
+            pnl_points = net_premium - intrusion
+            status = "partial_loss_put"
+
+        elif short_call < index_close <= long_call:
+            # Index between short call and long call — partial loss on call side
+            intrusion = index_close - short_call
+            pnl_points = net_premium - intrusion
+            status = "partial_loss_call"
+
+        elif index_close < long_put:
+            # Index below long put — max loss
+            pnl_points = net_premium - WING_WIDTH
+            status = "max_loss_put"
+
+        else:
+            # Index above long call — max loss
+            pnl_points = net_premium - WING_WIDTH
+            status = "max_loss_call"
+
+        pnl_ils = round(pnl_points * TASE_MULTIPLIER, 2)
+
+        # 4. Update row in Supabase
+        patch_url = f"{update_url}?id=eq.{s['id']}"
+        patch_data = {
+            "actual_index_close": round(index_close, 2),
+            "actual_pnl_points":  round(pnl_points, 2),
+            "actual_pnl_ils":     pnl_ils,
+            "result_status":      status,
+        }
+
+        try:
+            headers = _headers()
+            headers["Prefer"] = "return=minimal"
+            r = httpx.patch(patch_url, headers=headers,
+                            content=json.dumps(patch_data),
+                            timeout=15)
+            if r.status_code in (200, 204):
+                settled += 1
+                emoji = "✅" if pnl_points > 0 else "❌"
+                logger.info(
+                    "   %s %.1f%% | Index=%.2f | P&L=%.2f pts (₪%.2f) | %s",
+                    emoji, _clean_numeric(s.get("interval_pct")),
+                    index_close, pnl_points, pnl_ils, status,
+                )
+            else:
+                logger.warning("Settlement update failed %d: %s",
+                               r.status_code, r.text[:200])
+        except Exception as e:
+            logger.warning("Settlement update error: %s", e)
+
+    logger.info("SETTLEMENT DONE: %d/%d strategies settled",
+                settled, len(strategies))
+    logger.info("=" * 50)
+
+    # Send Telegram settlement report
+    if settled > 0:
+        exp_weekday = date.fromisoformat(expiry_date_iso).weekday()
+        day_he = {
+            0: "שני", 1: "שלישי", 2: "רביעי",
+            3: "חמישי", 4: "שישי",
+        }
+        day_name = day_he.get(exp_weekday, "")
+
+        # Build results list for telegram
+        report = []
+        for s in strategies:
+            report.append({
+                "interval_pct":     _clean_numeric(s.get("interval_pct")),
+                "short_put_strike": _clean_numeric(s.get("short_put_strike")),
+                "short_call_strike": _clean_numeric(s.get("short_call_strike")),
+                "actual_pnl_ils":   _clean_numeric(s.get("actual_pnl_ils", 0)),
+                "result_status":    s.get("result_status", ""),
+            })
+        # Re-read updated rows to get actual_pnl_ils
+        try:
+            read_url = (
+                f"{_base_url}/rest/v1/iron_condor_strategies"
+                f"?expiry_date=eq.{expiry_date_iso}"
+                f"&result_status=neq.null"
+                f"&select=interval_pct,short_put_strike,short_call_strike,"
+                f"actual_pnl_ils,result_status"
+                f"&order=interval_pct"
+            )
+            rr = httpx.get(read_url, headers=_headers(), timeout=15)
+            if rr.status_code in (200, 206):
+                report = rr.json()
+        except Exception:
+            pass
+
+        telegram_bot.alert_settlement(day_name, index_close, report)
+
+    return settled == len(strategies)

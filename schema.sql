@@ -157,6 +157,13 @@ CREATE TABLE iron_condor_strategies (
     wing_width              NUMERIC DEFAULT 20,
 
     status                  TEXT DEFAULT 'calculated',
+
+    -- Settlement (filled at expiry close)
+    actual_index_close      NUMERIC,
+    actual_pnl_points       NUMERIC,
+    actual_pnl_ils          NUMERIC,
+    result_status           TEXT,
+
     created_at              TIMESTAMPTZ DEFAULT now()
 );
 

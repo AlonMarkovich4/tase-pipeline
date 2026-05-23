@@ -23,6 +23,7 @@ from playwright.sync_api import sync_playwright
 
 import database as db
 import strategy_engine
+import telegram_bot
 
 # ------------------------------------------------------------------
 # Config
@@ -32,7 +33,8 @@ FETCH_INTERVAL  = int(os.environ.get("FETCH_INTERVAL_MINUTES", "15")) * 60
 PAGE_TIMEOUT    = 45_000
 RENDER_WAIT     = 6
 BROWSER_RESTART = 6 * 3600  # restart browser every 6h
-STRATEGY_TRIGGER = dt_time(12, 0)  # Monday 12:00 PM
+STRATEGY_TRIGGER  = dt_time(12, 0)  # Weekly strategy trigger
+SETTLEMENT_AFTER  = dt_time(10, 0)  # Settlement after opening price
 
 API_URL    = "https://api.tase.co.il/api/derivatives/putvscall"
 EXPIRY_URL = "https://api.tase.co.il/api/derivatives/fltrputvscallexpdates"
@@ -343,7 +345,9 @@ def main():
         sys.exit(1)
 
     browser_born = time.monotonic()
-    strategy_triggered_today = False  # prevent multiple triggers
+    strategy_triggered_week = None   # track which week the strategy ran
+    settled_today = None             # track which date we settled
+    consecutive_failures = 0         # crash detection counter
 
     with sync_playwright() as pw:
         browser, context, page = launch_browser(pw)
@@ -375,40 +379,67 @@ def main():
 
             logger.info("-" * 50)
             logger.info("Cycle start: %s", now.strftime("%Y-%m-%d %H:%M"))
-            # Reset strategy flag at start of each day
-            if now.time() < dt_time(9, 45):
-                strategy_triggered_today = False
+            # Check which ISO week we're in
+            current_week = now.isocalendar()[1]
 
             try:
                 ok = run_cycle(page, now)
 
-                # Monday 12:00 strategy trigger
-                if (ok and now.weekday() == 0
+                # Weekly strategy trigger: first day with data after 12:00
+                if (ok
                         and now.time() >= STRATEGY_TRIGGER
-                        and not strategy_triggered_today):
-                    logger.info("*** Monday 12:00 — triggering Iron Condor strategy ***")
+                        and strategy_triggered_week != current_week):
+                    en, _ = DAY_NAMES.get(now.weekday(), ("?", "?"))
+                    logger.info("*** %s 12:00 — triggering Iron Condor strategy (week %d) ***",
+                                en, current_week)
                     try:
                         strategy_engine.run_strategy()
-                        strategy_triggered_today = True
+                        strategy_triggered_week = current_week
                     except Exception as se:
                         logger.error("Strategy engine error: %s", se, exc_info=True)
+
+                # Settlement: expiry day after 10:00 (opening price set)
+                today_iso = now.strftime("%Y-%m-%d")
+                if (ok
+                        and now.time() >= SETTLEMENT_AFTER
+                        and settled_today != today_iso):
+                    try:
+                        logger.info("*** Checking settlement for expiry %s ***", today_iso)
+                        strategy_engine.settle_expiry(today_iso)
+                        settled_today = today_iso
+                    except Exception as se:
+                        logger.error("Settlement error: %s", se, exc_info=True)
 
                 if ok and is_last_cycle(now):
                     logger.info("*** Last cycle of the day — saving to history ***")
                     db.copy_to_history()
                 if not ok:
-                    logger.warning("Cycle empty — recovering session")
+                    consecutive_failures += 1
+                    logger.warning("Cycle empty (%d consecutive) — recovering session",
+                                   consecutive_failures)
+                    if consecutive_failures >= 3:
+                        telegram_bot.alert_crash(
+                            f"{consecutive_failures} consecutive failures"
+                        )
                     browser, context, page = recover_session(
                         pw, browser, context, page
                     )
+                else:
+                    consecutive_failures = 0
+
             except Exception as e:
-                logger.error("Cycle error: %s", e, exc_info=True)
+                consecutive_failures += 1
+                logger.error("Cycle error (%d consecutive): %s",
+                             consecutive_failures, e, exc_info=True)
+                if consecutive_failures >= 3:
+                    telegram_bot.alert_crash(str(e))
                 try:
                     browser, context, page = recover_session(
                         pw, browser, context, page
                     )
                 except Exception as e2:
                     logger.critical("Recovery failed: %s", e2)
+                    telegram_bot.alert_crash(f"Recovery failed: {e2}")
 
             logger.info("Sleeping %d min...", FETCH_INTERVAL // 60)
             shutdown.wait(timeout=FETCH_INTERVAL)
