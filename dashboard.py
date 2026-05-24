@@ -1,160 +1,492 @@
 """
-TASE TA-35 Options Dashboard
+TASE TA-35 — Premium Options Trading Workstation
+=================================================
+Enterprise-grade dashboard: live monitor, Iron Condor strategies
+with Plotly range-risk visualizations, and historical P&L analytics.
 """
 
-import os
+import os, math
 import streamlit as st
 import pandas as pd
 import httpx
+import plotly.graph_objects as go
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
-st.set_page_config(page_title="TA-35 Options", page_icon="📊", layout="wide")
+# ==================================================================
+# CONFIG
+# ==================================================================
+st.set_page_config(page_title="TA-35 Workstation", page_icon="◆", layout="wide")
 
-# RTL only — no design overrides
-st.markdown("""<style>
-.main .block-container{direction:rtl;text-align:right}
-[data-testid="stSidebar"]{direction:rtl;text-align:right}
-[data-testid="stMarkdownContainer"]{direction:rtl;text-align:right}
-[data-testid="stRadio"] > div{direction:rtl}
-[data-testid="stRadio"] label{direction:rtl;text-align:right}
-[data-testid="stAlert"]{direction:rtl;text-align:right}
-[data-testid="stMetricValue"]{direction:ltr}
-#MainMenu,footer,header{visibility:hidden}
-</style>""", unsafe_allow_html=True)
-
-# ------------------------------------------------------------------
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 TZ = ZoneInfo("Asia/Jerusalem")
 DAYS = {0:"שני",1:"שלישי",2:"רביעי",3:"חמישי",4:"שישי",5:"שבת",6:"ראשון"}
 
+# Palette
+C_BG       = "#0B0D10"
+C_CARD     = "#151921"
+C_BORDER   = "#1E2433"
+C_TEXT     = "#E8EAED"
+C_DIM      = "#6B7B8D"
+C_GREEN    = "#00E676"
+C_RED      = "#FF1744"
+C_BLUE     = "#00B0FF"
+C_GRID     = "#1A1F2B"
+
+# ==================================================================
+# GLOBAL CSS
+# ==================================================================
+st.markdown(f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+/* ---- Reset & base ---- */
+html, body, [class*="css"] {{
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+}}
+.main .block-container {{
+    direction: rtl; text-align: right;
+    padding: 1.5rem 2rem 2rem !important;
+    max-width: 1400px;
+}}
+[data-testid="stSidebar"] {{
+    direction: rtl; text-align: right;
+    background: {C_BG} !important;
+    border-left: 1px solid {C_BORDER} !important;
+}}
+[data-testid="stSidebar"] > div:first-child {{
+    background: {C_BG} !important;
+}}
+[data-testid="stMarkdownContainer"],
+[data-testid="stAlert"],
+[data-testid="stRadio"] > div,
+[data-testid="stRadio"] label,
+[data-testid="stSelectbox"] label {{
+    direction: rtl; text-align: right;
+}}
+
+/* Hide Streamlit chrome */
+#MainMenu, footer, header {{ visibility: hidden; }}
+.stDeployButton {{ display: none; }}
+
+/* ---- KPI Cards ---- */
+.kpi-grid {{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+}}
+.kpi {{
+    background: {C_CARD};
+    border: 1px solid {C_BORDER};
+    border-radius: 10px;
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
+}}
+.kpi::after {{
+    content: '';
+    position: absolute;
+    top: 0; right: 0;
+    width: 4px; height: 100%;
+    border-radius: 0 10px 10px 0;
+}}
+.kpi.accent-green::after {{ background: {C_GREEN}; }}
+.kpi.accent-blue::after  {{ background: {C_BLUE}; }}
+.kpi.accent-red::after   {{ background: {C_RED}; }}
+.kpi.accent-dim::after   {{ background: {C_DIM}; }}
+.kpi .label {{
+    font-size: 11px;
+    font-weight: 600;
+    color: {C_DIM};
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 6px;
+}}
+.kpi .val {{
+    font-size: 24px;
+    font-weight: 700;
+    color: {C_TEXT};
+    direction: ltr;
+    unicode-bidi: isolate;
+}}
+.kpi .val.sm {{ font-size: 17px; }}
+.kpi .val.green {{ color: {C_GREEN}; }}
+.kpi .val.red {{ color: {C_RED}; }}
+.kpi .val.blue {{ color: {C_BLUE}; }}
+.kpi .sub {{
+    font-size: 11px;
+    color: {C_DIM};
+    margin-top: 3px;
+    direction: ltr;
+    unicode-bidi: isolate;
+}}
+
+/* ---- Live dot ---- */
+@keyframes pulse {{
+    0%, 100% {{ opacity: 1; }}
+    50% {{ opacity: 0.3; }}
+}}
+.live-dot {{
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-left: 6px;
+    vertical-align: middle;
+}}
+.live-dot.on {{
+    background: {C_GREEN};
+    box-shadow: 0 0 8px {C_GREEN};
+    animation: pulse 2s ease-in-out infinite;
+}}
+.live-dot.off {{
+    background: {C_DIM};
+}}
+
+/* ---- Section header ---- */
+.sec-hdr {{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 16px;
+    font-weight: 700;
+    color: {C_TEXT};
+    margin: 20px 0 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid {C_BORDER};
+}}
+
+/* ---- Expiry header ---- */
+.exp-hdr {{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 18px 0 10px;
+}}
+.exp-hdr .day {{
+    font-size: 15px;
+    font-weight: 700;
+    color: {C_TEXT};
+}}
+.exp-hdr .badge {{
+    font-size: 10px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+}}
+.exp-hdr .badge.settled {{
+    background: rgba(0,230,118,0.12);
+    color: {C_GREEN};
+    border: 1px solid rgba(0,230,118,0.3);
+}}
+.exp-hdr .badge.open {{
+    background: rgba(0,176,255,0.10);
+    color: {C_BLUE};
+    border: 1px solid rgba(0,176,255,0.25);
+}}
+
+/* ---- Sidebar brand ---- */
+.sb-brand {{
+    text-align: center;
+    padding: 20px 0 12px;
+}}
+.sb-brand .logo {{
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 3px;
+    color: {C_BLUE};
+}}
+.sb-brand .title {{
+    font-size: 18px;
+    font-weight: 800;
+    color: {C_TEXT};
+    margin-top: 4px;
+}}
+.sb-status {{
+    text-align: center;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin: 10px 8px;
+}}
+.sb-status.on {{
+    background: rgba(0,230,118,0.08);
+    border: 1px solid rgba(0,230,118,0.25);
+    color: {C_GREEN};
+}}
+.sb-status.off {{
+    background: rgba(107,123,141,0.08);
+    border: 1px solid rgba(107,123,141,0.25);
+    color: {C_DIM};
+}}
+.sb-clock {{
+    text-align: center;
+    font-size: 13px;
+    color: {C_DIM};
+    margin: 6px 0 10px;
+}}
+
+/* ---- DataFrames ---- */
+div[data-testid="stDataFrame"] {{
+    border: 1px solid {C_BORDER};
+    border-radius: 8px;
+    overflow: hidden;
+}}
+
+/* ---- Buttons ---- */
+.stButton > button {{
+    background: {C_CARD} !important;
+    color: {C_DIM} !important;
+    border: 1px solid {C_BORDER} !important;
+    border-radius: 6px !important;
+    font-weight: 600 !important;
+    font-size: 13px !important;
+    transition: all 0.15s !important;
+}}
+.stButton > button:hover {{
+    background: {C_BORDER} !important;
+    color: {C_TEXT} !important;
+    border-color: {C_BLUE} !important;
+}}
+
+/* ---- Misc ---- */
+hr {{ border-color: {C_BORDER} !important; opacity: 0.5 !important; }}
+[data-testid="stMetric"] {{ display: none; }}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ==================================================================
+# HELPERS
+# ==================================================================
 def _hdr():
-    return {"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}",
-            "Content-Type":"application/json"}
+    return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json"}
 
 @st.cache_data(ttl=60)
 def fetch(table, params=""):
     try:
         r = httpx.get(f"{SUPABASE_URL}/rest/v1/{table}?select=*{params}",
                       headers=_hdr(), timeout=15)
-        if r.status_code in (200,206):
+        if r.status_code in (200, 206):
             d = r.json()
-            if d: return pd.DataFrame(d)
-    except Exception: pass
+            if d:
+                return pd.DataFrame(d)
+    except Exception:
+        pass
     return pd.DataFrame()
 
-def n(val):
-    """Safe numeric conversion."""
-    if val is None or val == "" or (isinstance(val, str) and val.strip() == ""):
-        return None
-    if isinstance(val, (int, float)): return float(val)
-    try: return float(str(val).replace(",",""))
-    except: return None
 
-def fmt(val, decimals=0):
-    """Format number or return —."""
-    v = n(val)
-    if v is None: return "—"
-    if decimals == 0: return f"{v:,.0f}"
-    return f"{v:,.{decimals}f}"
+def N(val):
+    """Safe numeric."""
+    if val is None or val == "":
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    try:
+        return float(str(val).replace(",", ""))
+    except (ValueError, TypeError):
+        return None
+
+
+def fmt(val, dec=0):
+    v = N(val)
+    if v is None:
+        return "—"
+    if dec == 0:
+        return f"{v:,.0f}"
+    return f"{v:,.{dec}f}"
+
 
 def get_idx(df):
-    for c in ["underlingasset_call","underlingasset_put"]:
+    for c in ["underlingasset_call", "underlingasset_put"]:
         if c in df.columns:
             for v in df[c]:
-                x = n(v)
-                if x and x > 0: return x
+                x = N(v)
+                if x and x > 0:
+                    return x
     return 0.0
 
-# ------------------------------------------------------------------
-# Sidebar
-# ------------------------------------------------------------------
+
+def relative_time(dt_str, tm_str=""):
+    """Return relative timestamp string."""
+    try:
+        s = f"{dt_str} {tm_str}".strip()
+        for f in ["%Y-%m-%d %H:%M", "%Y-%m-%d"]:
+            try:
+                t = datetime.strptime(s, f).replace(tzinfo=TZ)
+                break
+            except ValueError:
+                continue
+        else:
+            return s
+        now = datetime.now(TZ)
+        diff = now - t
+        mins = int(diff.total_seconds() / 60)
+        if mins < 1:
+            return "עכשיו"
+        if mins < 60:
+            return f"לפני {mins} דקות"
+        hrs = mins // 60
+        if hrs < 24:
+            return f"לפני {hrs} שעות"
+        return f"לפני {diff.days} ימים"
+    except Exception:
+        return dt_str
+
+
+def plotly_layout(fig, h=None):
+    """Apply dark financial chart theme."""
+    fig.update_layout(
+        plot_bgcolor=C_CARD,
+        paper_bgcolor=C_CARD,
+        font=dict(family="Inter, sans-serif", color=C_TEXT, size=12),
+        margin=dict(l=20, r=20, t=30, b=20),
+        xaxis=dict(gridcolor=C_GRID, zerolinecolor=C_GRID,
+                   tickfont=dict(size=10, color=C_DIM)),
+        yaxis=dict(gridcolor=C_GRID, zerolinecolor=C_GRID,
+                   tickfont=dict(size=10, color=C_DIM)),
+        hoverlabel=dict(bgcolor=C_CARD, bordercolor=C_BORDER,
+                        font=dict(color=C_TEXT, size=12)),
+        legend=dict(font=dict(size=11, color=C_DIM)),
+        height=h,
+    )
+    return fig
+
+
+# ==================================================================
+# SIDEBAR
+# ==================================================================
 now = datetime.now(TZ)
-is_live = now.weekday() in {0,1,2,3,4} and 9 <= now.hour < 18
+is_live = now.weekday() in {0, 1, 2, 3, 4} and 9 <= now.hour < 18
 
-st.sidebar.markdown(f"### 📊 TA-35 Options")
-st.sidebar.caption(f"יום {DAYS.get(now.weekday(),'')} · {now.strftime('%d/%m/%Y')} · {now.strftime('%H:%M')}")
+st.sidebar.markdown("""
+<div class="sb-brand">
+    <div class="logo">◆ TASE TERMINAL</div>
+    <div class="title">TA-35 Options</div>
+</div>
+""", unsafe_allow_html=True)
 
-if is_live:
-    st.sidebar.success("🟢 שוק פתוח")
-else:
-    st.sidebar.info("🔴 שוק סגור")
+st.sidebar.markdown(
+    f'<div class="sb-clock">יום {DAYS.get(now.weekday(), "")} · '
+    f'{now.strftime("%d/%m/%Y")} · {now.strftime("%H:%M:%S")}</div>',
+    unsafe_allow_html=True)
 
-st.sidebar.divider()
-page = st.sidebar.radio("ניווט", ["מוניטור חי","אסטרטגיות","ביצועים"])
-st.sidebar.divider()
-if st.sidebar.button("🔄 רענן", use_container_width=True):
+dot = "on" if is_live else "off"
+label = "MARKET OPEN" if is_live else "MARKET CLOSED"
+cls = "on" if is_live else "off"
+st.sidebar.markdown(
+    f'<div class="sb-status {cls}">'
+    f'<span class="live-dot {dot}"></span> {label}</div>',
+    unsafe_allow_html=True)
+
+st.sidebar.markdown("---")
+page = st.sidebar.radio("ניווט", ["מוניטור חי", "אסטרטגיות", "ביצועים"])
+st.sidebar.markdown("---")
+
+if st.sidebar.button("🔄 רענן נתונים", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
+st.sidebar.markdown("---")
+st.sidebar.caption("v2.0 · Render · Supabase · Telegram")
+
 
 # ==================================================================
-if page == "מוניטור חי":
+# PAGE 1: LIVE MONITOR
 # ==================================================================
-    st.title("מוניטור חי")
+if page == "מוניטור חי":
+    dot_html = f'<span class="live-dot {"on" if is_live else "off"}"></span>'
+    st.markdown(
+        f'<div class="sec-hdr">{dot_html} מוניטור חי — Put / Call</div>',
+        unsafe_allow_html=True)
 
     df = fetch("tase_putcall")
     if df.empty:
-        st.warning("אין נתונים זמינים.")
+        st.warning("אין נתונים זמינים כרגע.")
         st.stop()
 
     idx = get_idx(df)
-    ft = df["fetch_time"].iloc[0] if "fetch_time" in df.columns else "—"
     fd = df["fetch_date"].iloc[0] if "fetch_date" in df.columns else ""
+    ft = df["fetch_time"].iloc[0] if "fetch_time" in df.columns else ""
+    n_exp = df["expiry_date"].nunique() if "expiry_date" in df.columns else 0
+    rel = relative_time(fd, ft)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("מדד TA-35", fmt(idx, 2))
-    c2.metric("עדכון אחרון", f"{fd}  {ft}")
-    c3.metric("רשומות", len(df))
+    idx_cls = "green" if idx > 0 else "dim"
+    st.markdown(f"""
+    <div class="kpi-grid">
+        <div class="kpi accent-green">
+            <div class="label">TA-35 INDEX</div>
+            <div class="val {idx_cls}">{fmt(idx, 2)}</div>
+        </div>
+        <div class="kpi accent-blue">
+            <div class="label">LAST UPDATE</div>
+            <div class="val sm">{ft or '—'}</div>
+            <div class="sub">{rel}</div>
+        </div>
+        <div class="kpi accent-dim">
+            <div class="label">EXPIRY DATES</div>
+            <div class="val">{n_exp}</div>
+        </div>
+        <div class="kpi accent-dim">
+            <div class="label">TOTAL ROWS</div>
+            <div class="val">{len(df)}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.divider()
-
-    # Filter by expiry
+    # Expiry filter
     if "expiry_date" in df.columns:
         exps = sorted(df["expiry_date"].unique())
         labels = []
         for e in exps:
             try:
                 d = date.fromisoformat(e)
-                labels.append(f"יום {DAYS.get(d.weekday(),'')} — {e}")
-            except: labels.append(e)
-        choice = st.selectbox("יום פקיעה", labels)
-        df = df[df["expiry_date"] == exps[labels.index(choice)]]
+                labels.append(f"יום {DAYS.get(d.weekday(), '')} — {e}")
+            except Exception:
+                labels.append(e)
+        sel = st.selectbox("בחר יום פקיעה", labels, index=0)
+        df = df[df["expiry_date"] == exps[labels.index(sel)]]
 
     # Build clean table
     rows = []
     for _, r in df.iterrows():
-        strike_c = n(r.get("expirationprice_call"))
-        strike_p = n(r.get("expirationprice_put"))
-        if strike_c is None and strike_p is None:
-            continue  # skip empty header rows
+        sc = N(r.get("expirationprice_call"))
+        sp = N(r.get("expirationprice_put"))
+        if sc is None and sp is None:
+            continue
         rows.append({
-            "Strike": fmt(strike_c or strike_p),
-            "Call": r.get("derivativename_call","") or "",
+            "Strike": fmt(sc or sp),
+            "Call": str(r.get("derivativename_call", "") or "").strip() or "—",
             "מחיר Call": fmt(r.get("lastrate_call")),
             "O.I Call": fmt(r.get("openpositions_call")),
-            "Put": r.get("derivativename_put","") or "",
+            "Put": str(r.get("derivativename_put", "") or "").strip() or "—",
             "מחיר Put": fmt(r.get("lastrate_put")),
             "O.I Put": fmt(r.get("openpositions_put")),
         })
 
     if rows:
         st.dataframe(pd.DataFrame(rows), use_container_width=True,
-                     height=550, hide_index=True)
+                     height=540, hide_index=True)
     else:
-        st.info("אין נתוני מסחר ליום הזה.")
+        st.info("אין נתוני מסחר ליום פקיעה זה.")
 
 
+# ==================================================================
+# PAGE 2: STRATEGIES
 # ==================================================================
 elif page == "אסטרטגיות":
-# ==================================================================
-    st.title("אסטרטגיות Iron Condor")
+    st.markdown(
+        '<div class="sec-hdr">אסטרטגיות Iron Condor</div>',
+        unsafe_allow_html=True)
 
     df_s = fetch("iron_condor_strategies",
                  "&order=trigger_date.desc,expiry_date,interval_pct")
     if df_s.empty:
-        st.info("אין אסטרטגיות עדיין.")
+        st.info("אין אסטרטגיות עדיין. הראשונה תיווצר ביום מסחר הקרוב אחרי 12:00.")
         st.stop()
 
     today_d = date.today()
@@ -166,32 +498,116 @@ elif page == "אסטרטגיות":
     if df_w.empty:
         latest = df_s["trigger_date"].max()
         df_w = df_s[df_s["trigger_date"] == latest].copy()
-        st.caption(f"מציג אסטרטגיות מ-{latest}")
+        st.caption(f"אין אסטרטגיות השבוע — מציג {latest}")
 
+    # Current index
     idx = get_idx(fetch("tase_putcall"))
+
     if idx > 0:
-        st.metric("מדד TA-35 נוכחי", fmt(idx, 2))
-    st.divider()
+        st.markdown(f"""
+        <div class="kpi-grid">
+            <div class="kpi accent-green" style="max-width:280px;">
+                <div class="label">CURRENT TA-35 INDEX</div>
+                <div class="val green">{fmt(idx, 2)}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    for exp in sorted(df_w["expiry_date"].unique()):
+    # ---- Per expiry ----
+    for exp_date in sorted(df_w["expiry_date"].unique()):
         try:
-            ed = date.fromisoformat(exp)
-            dn = DAYS.get(ed.weekday(), "")
-        except: dn = ""
+            exp_d = date.fromisoformat(exp_date)
+            dn = DAYS.get(exp_d.weekday(), "")
+        except Exception:
+            dn = ""
 
-        df_e = df_w[df_w["expiry_date"] == exp].sort_values("interval_pct")
-        settled = (df_e["result_status"].notna().any()
+        df_e = df_w[df_w["expiry_date"] == exp_date].sort_values("interval_pct")
+        has_res = (df_e["result_status"].notna().any()
                    if "result_status" in df_e.columns else False)
 
-        tag = "✅ נסגר" if settled else "⏳ פתוח"
-        st.subheader(f"יום {dn} — {exp}  ({tag})")
+        badge = ('<span class="badge settled">SETTLED</span>' if has_res
+                 else '<span class="badge open">OPEN</span>')
+        st.markdown(
+            f'<div class="exp-hdr">'
+            f'<span class="day">יום {dn} — {exp_date}</span>{badge}</div>',
+            unsafe_allow_html=True)
 
+        # ---------- Plotly Range-Risk Bar ----------
+        if idx > 0 and not df_e.empty:
+            mid = df_e.iloc[len(df_e) // 2]
+            lp = N(mid.get("long_put_strike", 0)) or 0
+            sp = N(mid.get("short_put_strike", 0)) or 0
+            sc = N(mid.get("short_call_strike", 0)) or 0
+            lc = N(mid.get("long_call_strike", 0)) or 0
+
+            if lp > 0 and lc > 0:
+                pad = 30
+                x_min = lp - pad
+                x_max = lc + pad
+
+                fig = go.Figure()
+
+                # Risk zone left (Long Put → Short Put)
+                fig.add_shape(type="rect",
+                    x0=lp, x1=sp, y0=0, y1=1,
+                    fillcolor="rgba(255,23,68,0.12)",
+                    line=dict(color="rgba(255,23,68,0.3)", width=1))
+
+                # Safe zone (Short Put → Short Call)
+                fig.add_shape(type="rect",
+                    x0=sp, x1=sc, y0=0, y1=1,
+                    fillcolor="rgba(0,230,118,0.12)",
+                    line=dict(color="rgba(0,230,118,0.3)", width=1))
+
+                # Risk zone right (Short Call → Long Call)
+                fig.add_shape(type="rect",
+                    x0=sc, x1=lc, y0=0, y1=1,
+                    fillcolor="rgba(255,23,68,0.12)",
+                    line=dict(color="rgba(255,23,68,0.3)", width=1))
+
+                # Strike markers
+                for val, name, color in [
+                    (lp, "LP", C_RED), (sp, "SP", C_GREEN),
+                    (sc, "SC", C_GREEN), (lc, "LC", C_RED)
+                ]:
+                    fig.add_trace(go.Scatter(
+                        x=[val], y=[0.5], mode="markers+text",
+                        marker=dict(size=10, color=color, symbol="diamond"),
+                        text=[f"{name}\n{val:.0f}"],
+                        textposition="top center",
+                        textfont=dict(size=10, color=color),
+                        showlegend=False,
+                        hovertemplate=f"{name}: {val:.0f}<extra></extra>"))
+
+                # Current index line
+                fig.add_trace(go.Scatter(
+                    x=[idx, idx], y=[-0.1, 1.1], mode="lines",
+                    line=dict(color=C_BLUE, width=2.5, dash="dot"),
+                    name=f"Index: {idx:,.2f}",
+                    hovertemplate=f"TA-35: {idx:,.2f}<extra></extra>"))
+
+                fig.update_layout(
+                    xaxis=dict(range=[x_min, x_max], showgrid=False,
+                               tickfont=dict(size=10, color=C_DIM)),
+                    yaxis=dict(visible=False, range=[-0.2, 1.3]),
+                    height=140,
+                    margin=dict(l=10, r=10, t=10, b=30),
+                    plot_bgcolor=C_CARD, paper_bgcolor=C_CARD,
+                    font=dict(family="Inter", color=C_TEXT),
+                    legend=dict(orientation="h", yanchor="bottom",
+                                y=-0.4, font=dict(size=10, color=C_DIM)),
+                    hoverlabel=dict(bgcolor=C_CARD, bordercolor=C_BORDER,
+                                    font=dict(color=C_TEXT)),
+                )
+                st.plotly_chart(fig, use_container_width=True, key=f"risk_{exp_date}")
+
+        # ---------- Data table ----------
         tbl = []
         for _, r in df_e.iterrows():
             res = r.get("result_status")
-            pnl = n(r.get("actual_pnl_ils", 0))
+            pnl = N(r.get("actual_pnl_ils", 0))
             tbl.append({
-                "מרווח": f'{n(r.get("interval_pct",0)) or 0}%',
+                "מרווח": f'{N(r.get("interval_pct", 0)) or 0}%',
                 "Long Put": fmt(r.get("long_put_strike")),
                 "Short Put": fmt(r.get("short_put_strike")),
                 "Short Call": fmt(r.get("short_call_strike")),
@@ -204,82 +620,177 @@ elif page == "אסטרטגיות":
             })
         st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True)
 
+        # Position text
         if idx > 0 and not df_e.empty:
-            mid = df_e.iloc[len(df_e)//2]
-            sp = n(mid.get("short_put_strike",0)) or 0
-            sc = n(mid.get("short_call_strike",0)) or 0
-            if sp > 0 and sc > 0:
-                if sp <= idx <= sc:
-                    st.success(f"מדד {idx:,.2f} בטווח הרווח ({sp:.0f} – {sc:.0f})")
-                elif idx < sp:
-                    st.warning(f"מדד {idx:,.2f} מתחת ל-Short Put ({sp:.0f})")
+            mid = df_e.iloc[len(df_e) // 2]
+            sp_v = N(mid.get("short_put_strike", 0)) or 0
+            sc_v = N(mid.get("short_call_strike", 0)) or 0
+            if sp_v > 0 and sc_v > 0:
+                if sp_v <= idx <= sc_v:
+                    st.success(f"מדד {idx:,.2f} בטווח הרווח ({sp_v:.0f} – {sc_v:.0f})")
+                elif idx < sp_v:
+                    st.warning(f"מדד {idx:,.2f} מתחת ל-Short Put ({sp_v:.0f}) ב-{sp_v - idx:.0f} נק׳")
                 else:
-                    st.warning(f"מדד {idx:,.2f} מעל ל-Short Call ({sc:.0f})")
-        st.divider()
+                    st.warning(f"מדד {idx:,.2f} מעל ל-Short Call ({sc_v:.0f}) ב-{idx - sc_v:.0f} נק׳")
+
+        st.markdown("---")
 
 
+# ==================================================================
+# PAGE 3: PERFORMANCE
 # ==================================================================
 elif page == "ביצועים":
-# ==================================================================
-    st.title("ביצועים היסטוריים")
+    st.markdown(
+        '<div class="sec-hdr">ביצועים היסטוריים — Iron Condor</div>',
+        unsafe_allow_html=True)
 
     df_h = fetch("iron_condor_strategies",
                  "&result_status=not.is.null&order=trigger_date,interval_pct")
     if df_h.empty:
-        st.info("אין תוצאות עדיין.")
+        st.info("אין תוצאות עדיין — יופיעו אחרי הפקיעה הראשונה.")
         st.stop()
 
-    for c in ["actual_pnl_ils","max_profit_ils","max_risk_ils","interval_pct"]:
+    for c in ["actual_pnl_ils", "max_profit_ils", "max_risk_ils", "interval_pct"]:
         if c in df_h.columns:
-            df_h[c] = df_h[c].apply(lambda v: n(v) or 0)
+            df_h[c] = df_h[c].apply(lambda v: N(v) or 0)
 
     total = df_h["actual_pnl_ils"].sum()
     trades = len(df_h)
     wins = len(df_h[df_h["actual_pnl_ils"] > 0])
-    wr = (wins/trades*100) if trades > 0 else 0
+    losses = trades - wins
+    wr = (wins / trades * 100) if trades > 0 else 0
+    avg_win = df_h[df_h["actual_pnl_ils"] > 0]["actual_pnl_ils"].mean() if wins > 0 else 0
+    avg_loss = df_h[df_h["actual_pnl_ils"] <= 0]["actual_pnl_ils"].mean() if losses > 0 else 0
+    pnl_cls = "green" if total >= 0 else "red"
+    pnl_prefix = "+" if total >= 0 else ""
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("סה״כ P&L", f"₪{total:+,.0f}")
-    c2.metric("הצלחה", f"{wr:.0f}%", delta=f"{wins} מתוך {trades}")
-    c3.metric("עסקאות", trades)
+    st.markdown(f"""
+    <div class="kpi-grid">
+        <div class="kpi accent-{"green" if total >= 0 else "red"}">
+            <div class="label">TOTAL P&L</div>
+            <div class="val {pnl_cls}">₪{pnl_prefix}{total:,.0f}</div>
+            <div class="sub">{trades} trades</div>
+        </div>
+        <div class="kpi accent-green">
+            <div class="label">WIN RATE</div>
+            <div class="val green">{wr:.0f}%</div>
+            <div class="sub">{wins}W / {losses}L</div>
+        </div>
+        <div class="kpi accent-blue">
+            <div class="label">AVG WIN</div>
+            <div class="val blue">₪{avg_win:+,.0f}</div>
+        </div>
+        <div class="kpi accent-red">
+            <div class="label">AVG LOSS</div>
+            <div class="val red">₪{avg_loss:+,.0f}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.divider()
-
-    # Charts in tabs
-    st.subheader("גרפים")
+    # ---- Charts ----
     dbd = df_h.groupby("trigger_date")["actual_pnl_ils"].sum().reset_index()
-    dbd.columns = ["date","pnl"]
+    dbd.columns = ["date", "pnl"]
     dbd["cum"] = dbd["pnl"].cumsum()
-    dbd = dbd.set_index("date")
+    dbd["color"] = dbd["pnl"].apply(lambda x: C_GREEN if x >= 0 else C_RED)
 
-    t1, t2 = st.tabs(["יומי","מצטבר"])
-    with t1: st.bar_chart(dbd["pnl"], color="#2563eb")
-    with t2: st.line_chart(dbd["cum"], color="#16a34a")
+    tab1, tab2, tab3 = st.tabs(["P&L יומי", "P&L מצטבר", "Win Rate"])
 
-    st.divider()
+    with tab1:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=dbd["date"], y=dbd["pnl"],
+            marker_color=dbd["color"],
+            hovertemplate="<b>%{x}</b><br>P&L: ₪%{y:,.0f}<extra></extra>",
+        ))
+        fig.update_layout(showlegend=False)
+        plotly_layout(fig, h=340)
+        st.plotly_chart(fig, use_container_width=True)
 
-    # By interval
-    st.subheader("לפי מרווח")
+    with tab2:
+        fig = go.Figure()
+        fill_color = "rgba(0,230,118,0.1)" if dbd["cum"].iloc[-1] >= 0 else "rgba(255,23,68,0.1)"
+        line_color = C_GREEN if dbd["cum"].iloc[-1] >= 0 else C_RED
+        fig.add_trace(go.Scatter(
+            x=dbd["date"], y=dbd["cum"],
+            mode="lines", fill="tozeroy",
+            fillcolor=fill_color,
+            line=dict(color=line_color, width=2.5),
+            hovertemplate="<b>%{x}</b><br>Cumulative: ₪%{y:,.0f}<extra></extra>",
+        ))
+        fig.update_layout(showlegend=False)
+        plotly_layout(fig, h=340)
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tab3:
+        fig = go.Figure()
+        fig.add_trace(go.Pie(
+            labels=["ניצחונות", "הפסדים"],
+            values=[wins, losses],
+            marker=dict(colors=[C_GREEN, C_RED]),
+            textinfo="percent+label",
+            textfont=dict(size=13, color=C_TEXT),
+            hovertemplate="%{label}: %{value} trades<br>%{percent}<extra></extra>",
+            hole=0.55,
+        ))
+        fig.update_layout(
+            plot_bgcolor=C_CARD, paper_bgcolor=C_CARD,
+            font=dict(family="Inter", color=C_TEXT),
+            margin=dict(l=20, r=20, t=20, b=20),
+            height=300,
+            showlegend=False,
+            annotations=[dict(
+                text=f"{wr:.0f}%", x=0.5, y=0.5,
+                font=dict(size=28, color=C_GREEN, family="Inter"),
+                showarrow=False)],
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # ---- By interval ----
+    st.markdown('<div class="sec-hdr">ביצועים לפי מרווח</div>', unsafe_allow_html=True)
+
     dbp = df_h.groupby("interval_pct").agg(
-        pnl=("actual_pnl_ils","sum"), avg=("actual_pnl_ils","mean"),
-        cnt=("actual_pnl_ils","count"),
-        w=("actual_pnl_ils", lambda x: (x>0).sum())
+        pnl=("actual_pnl_ils", "sum"),
+        avg=("actual_pnl_ils", "mean"),
+        cnt=("actual_pnl_ils", "count"),
+        w=("actual_pnl_ils", lambda x: (x > 0).sum()),
     ).reset_index()
-    dbp["wr"] = (dbp["w"]/dbp["cnt"]*100).round(1)
-    dbp.columns = ["מרווח %","סה״כ ₪","ממוצע ₪","עסקאות","ניצחונות","הצלחה %"]
+    dbp["wr"] = (dbp["w"] / dbp["cnt"] * 100).round(1)
+
+    # Plotly grouped bar
+    fig = go.Figure()
+    colors = [C_GREEN if v >= 0 else C_RED for v in dbp["pnl"]]
+    fig.add_trace(go.Bar(
+        x=dbp["interval_pct"].apply(lambda x: f"{x}%"),
+        y=dbp["pnl"],
+        marker_color=colors,
+        name="Total P&L",
+        hovertemplate="מרווח: %{x}<br>P&L: ₪%{y:,.0f}<extra></extra>",
+    ))
+    fig.update_layout(showlegend=False,
+                      xaxis_title="Interval %", yaxis_title="P&L (₪)")
+    plotly_layout(fig, h=300)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Summary table
+    dbp.columns = ["מרווח %", "סה״כ ₪", "ממוצע ₪", "עסקאות", "ניצחונות", "הצלחה %"]
     st.dataframe(dbp, use_container_width=True, hide_index=True)
 
-    st.divider()
+    st.markdown("---")
 
-    # Full history
-    st.subheader("כל העסקאות")
-    det = ["trigger_date","expiry_date","interval_pct",
-           "short_put_strike","short_call_strike",
-           "actual_index_close","result_status","actual_pnl_ils"]
-    av = [c for c in det if c in df_h.columns]
-    dfd = df_h[av].rename(columns={
-        "trigger_date":"תאריך","expiry_date":"פקיעה","interval_pct":"מרווח",
-        "short_put_strike":"SP","short_call_strike":"SC",
-        "actual_index_close":"מדד פקיעה","result_status":"תוצאה",
-        "actual_pnl_ils":"P&L ₪"})
+    # ---- Full history ----
+    st.markdown('<div class="sec-hdr">היסטוריה מלאה</div>', unsafe_allow_html=True)
+
+    det = ["trigger_date", "expiry_date", "interval_pct",
+           "short_put_strike", "short_call_strike",
+           "actual_index_close", "result_status", "actual_pnl_ils"]
+    avail = [c for c in det if c in df_h.columns]
+    dfd = df_h[avail].sort_values("actual_pnl_ils", ascending=False)
+    dfd = dfd.rename(columns={
+        "trigger_date": "תאריך", "expiry_date": "פקיעה",
+        "interval_pct": "מרווח %", "short_put_strike": "Short Put",
+        "short_call_strike": "Short Call", "actual_index_close": "מדד פקיעה",
+        "result_status": "תוצאה", "actual_pnl_ils": "P&L ₪",
+    })
     st.dataframe(dfd, use_container_width=True, height=400, hide_index=True)
