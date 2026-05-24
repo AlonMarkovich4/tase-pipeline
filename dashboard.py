@@ -2,7 +2,6 @@
 TASE Pipeline — Streamlit Dashboard
 =====================================
 Live monitor, strategy viewer, and historical P&L analytics.
-Connects to Supabase for all data.
 """
 
 import os
@@ -23,167 +22,132 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------------
-# RTL + Dark Premium CSS
+# CSS — clean RTL + dark theme
 # ------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* ============================================
-       RTL — flip sidebar to the right
-       ============================================ */
-    [data-testid="stSidebar"] {
-        right: 0 !important;
-        left: auto !important;
-        direction: rtl !important;
-        border-right: none !important;
-        border-left: 1px solid #1e293b !important;
-    }
-    /* push main content to the left */
-    .main .block-container {
-        direction: rtl !important;
-        text-align: right !important;
-    }
-    [data-testid="stAppViewContainer"] {
-        direction: rtl !important;
-    }
-    /* all text elements RTL */
-    [data-testid="stMarkdownContainer"],
-    [data-testid="stMetricValue"],
-    [data-testid="stMetricLabel"],
-    [data-testid="stMetricDelta"],
-    [data-testid="stAlert"],
-    [data-testid="stRadio"] label,
-    [data-testid="stRadio"] > div {
-        direction: rtl !important;
-        text-align: right !important;
-    }
+    /* ---- Global RTL ---- */
+    .main .block-container { direction: rtl; text-align: right; }
+    [data-testid="stSidebar"] { direction: rtl; text-align: right; }
+    [data-testid="stMarkdownContainer"] { direction: rtl; text-align: right; }
+    [data-testid="stRadio"] > div { direction: rtl; }
+    [data-testid="stRadio"] label { direction: rtl; text-align: right; }
+    [data-testid="stAlert"] { direction: rtl; text-align: right; }
 
-    /* ============================================
-       Dark premium backgrounds
-       ============================================ */
-    .main, [data-testid="stAppViewContainer"] {
-        background: linear-gradient(135deg, #0a0e1a 0%, #111827 50%, #0f172a 100%) !important;
-    }
-    [data-testid="stSidebar"] > div:first-child {
-        background: linear-gradient(180deg, #0d1321 0%, #141c2e 100%) !important;
-    }
-
-    /* ============================================
-       Headers
-       ============================================ */
-    h1 {
-        background: linear-gradient(90deg, #00d4aa, #4dabf7) !important;
-        -webkit-background-clip: text !important;
-        -webkit-text-fill-color: transparent !important;
-        font-weight: 800 !important;
-        font-size: 2rem !important;
-        padding-bottom: 8px !important;
-    }
-    h2, h3 {
-        color: #e2e8f0 !important;
-        font-weight: 600 !important;
-        border-bottom: 2px solid #1e293b;
-        padding-bottom: 6px;
-    }
-
-    /* ============================================
-       KPI metric cards
-       ============================================ */
-    [data-testid="stMetric"] {
-        background: linear-gradient(145deg, #1a2236 0%, #141c2e 100%) !important;
-        border: 1px solid #2d3a52 !important;
-        border-radius: 14px !important;
-        padding: 22px 20px !important;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3) !important;
-        transition: transform 0.2s, box-shadow 0.2s !important;
-        direction: rtl !important;
-        text-align: center !important;
-    }
-    [data-testid="stMetric"]:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 6px 20px rgba(0, 212, 170, 0.15) !important;
-    }
-    [data-testid="stMetricValue"] {
-        color: #00d4aa !important;
-        font-size: 1.5rem !important;
-        font-weight: 700 !important;
-        text-align: center !important;
-        direction: ltr !important;
-    }
-    [data-testid="stMetricLabel"] {
-        color: #94a3b8 !important;
-        font-size: 0.9rem !important;
-        font-weight: 600 !important;
-        text-align: center !important;
-        margin-bottom: 4px !important;
-    }
-    [data-testid="stMetricDelta"] {
-        font-size: 0.8rem !important;
-        text-align: center !important;
-    }
-
-    /* ============================================
-       DataFrames
-       ============================================ */
-    div[data-testid="stDataFrame"] {
-        border: 1px solid #1e293b !important;
-        border-radius: 12px !important;
-        overflow: hidden !important;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.2) !important;
-    }
-
-    /* ============================================
-       Buttons
-       ============================================ */
-    .stButton > button {
-        background: linear-gradient(135deg, #00d4aa 0%, #00b894 100%) !important;
-        color: #0a0e1a !important;
-        border: none !important;
-        border-radius: 10px !important;
-        font-weight: 700 !important;
-        padding: 10px 24px !important;
-        width: 100% !important;
-        transition: all 0.3s !important;
-    }
-    .stButton > button:hover {
-        transform: scale(1.03) !important;
-        box-shadow: 0 4px 15px rgba(0, 212, 170, 0.35) !important;
-    }
-
-    /* ============================================
-       Status badges
-       ============================================ */
-    .status-online {
-        color: #00d4aa;
-        font-weight: bold;
-        text-shadow: 0 0 8px rgba(0, 212, 170, 0.4);
-    }
-    .status-offline {
-        color: #ff6b6b;
-        font-weight: bold;
-        text-shadow: 0 0 8px rgba(255, 107, 107, 0.4);
-    }
-    .profit { color: #00d4aa !important; }
-    .loss { color: #ff6b6b !important; }
-
-    /* ============================================
-       Misc
-       ============================================ */
-    hr {
-        border-color: #1e293b !important;
-        opacity: 0.5 !important;
-    }
-
-    /* Hide Streamlit branding */
+    /* ---- Hide branding ---- */
     #MainMenu, footer, header { visibility: hidden; }
+
+    /* ---- Custom KPI card ---- */
+    .kpi-card {
+        background: linear-gradient(145deg, #1e293b, #172033);
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 20px 16px;
+        text-align: center;
+        min-height: 110px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    .kpi-label {
+        font-size: 13px;
+        color: #94a3b8;
+        font-weight: 500;
+        margin-bottom: 6px;
+    }
+    .kpi-value {
+        font-size: 26px;
+        font-weight: 700;
+        color: #00d4aa;
+        direction: ltr;
+        unicode-bidi: isolate;
+    }
+    .kpi-value.small-text {
+        font-size: 18px;
+    }
+
+    /* ---- Section title ---- */
+    .section-title {
+        font-size: 24px;
+        font-weight: 700;
+        color: #f1f5f9;
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid #1e293b;
+    }
+
+    /* ---- Status badge ---- */
+    .status-badge {
+        border-radius: 8px;
+        padding: 10px;
+        text-align: center;
+        font-weight: 600;
+        font-size: 14px;
+        margin: 8px 0;
+    }
+    .status-badge.online {
+        background: #052e16;
+        border: 1px solid #22c55e;
+        color: #4ade80;
+    }
+    .status-badge.offline {
+        background: #2a1215;
+        border: 1px solid #ef4444;
+        color: #f87171;
+    }
+
+    /* ---- Strategy result badges ---- */
+    .badge-profit { background: #052e16; color: #4ade80; padding: 3px 10px; border-radius: 6px; font-size: 13px; }
+    .badge-loss { background: #2a1215; color: #f87171; padding: 3px 10px; border-radius: 6px; font-size: 13px; }
+    .badge-open { background: #1e293b; color: #94a3b8; padding: 3px 10px; border-radius: 6px; font-size: 13px; }
+
+    /* ---- Sidebar ---- */
+    .sidebar-title {
+        text-align: center;
+        padding: 8px 0;
+    }
+    .sidebar-title .icon { font-size: 36px; }
+    .sidebar-title .name {
+        font-size: 20px;
+        font-weight: 800;
+        color: #00d4aa;
+    }
+    .sidebar-info {
+        font-size: 14px;
+        color: #cbd5e1;
+        text-align: center;
+        padding: 4px 0;
+    }
+
+    /* ---- DataFrames ---- */
+    div[data-testid="stDataFrame"] {
+        border: 1px solid #1e293b;
+        border-radius: 10px;
+        overflow: hidden;
+    }
+
+    /* ---- Buttons ---- */
+    .stButton > button {
+        background: #00d4aa !important;
+        color: #0f172a !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-weight: 700 !important;
+        width: 100% !important;
+    }
+
+    /* ---- Dividers ---- */
+    hr { border-color: #1e293b !important; opacity: 0.4 !important; }
 </style>
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------------
-# Supabase connection
+# Helpers
 # ------------------------------------------------------------------
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 TZ_ISRAEL = ZoneInfo("Asia/Jerusalem")
+DAY_NAMES_HE = {0: "שני", 1: "שלישי", 2: "רביעי", 3: "חמישי", 4: "שישי", 5: "שבת", 6: "ראשון"}
 
 
 def _headers():
@@ -196,7 +160,6 @@ def _headers():
 
 @st.cache_data(ttl=60)
 def fetch_table(table: str, params: str = "") -> pd.DataFrame:
-    """Fetch data from Supabase table."""
     url = f"{SUPABASE_URL}/rest/v1/{table}?select=*{params}"
     try:
         r = httpx.get(url, headers=_headers(), timeout=15)
@@ -210,7 +173,6 @@ def fetch_table(table: str, params: str = "") -> pd.DataFrame:
 
 
 def clean_numeric(val):
-    """Clean numeric values."""
     if val is None or val == "":
         return 0.0
     if isinstance(val, (int, float)):
@@ -221,45 +183,44 @@ def clean_numeric(val):
         return 0.0
 
 
+def kpi_card(label: str, value: str, small: bool = False):
+    size_cls = " small-text" if small else ""
+    return f"""
+    <div class="kpi-card">
+        <div class="kpi-label">{label}</div>
+        <div class="kpi-value{size_cls}">{value}</div>
+    </div>
+    """
+
+
 # ------------------------------------------------------------------
 # Sidebar
 # ------------------------------------------------------------------
 st.sidebar.markdown("""
-<div style="text-align:center; padding: 10px 0 5px;">
-    <span style="font-size: 2.2rem;">📊</span><br>
-    <span style="font-size: 1.3rem; font-weight: 800;
-                 background: linear-gradient(90deg, #00d4aa, #4dabf7);
-                 -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-        TASE TA-35
-    </span>
+<div class="sidebar-title">
+    <div class="icon">📊</div>
+    <div class="name">TASE TA-35</div>
 </div>
 """, unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 now = datetime.now(TZ_ISRAEL)
+day_he = DAY_NAMES_HE.get(now.weekday(), "")
 
-day_names_he = {0: "שני", 1: "שלישי", 2: "רביעי", 3: "חמישי", 4: "שישי", 5: "שבת", 6: "ראשון"}
-day_he = day_names_he.get(now.weekday(), "")
-
-st.sidebar.markdown(f"**🕐 {now.strftime('%H:%M:%S')}** &nbsp;|&nbsp; **יום {day_he}** {now.strftime('%d/%m/%Y')}",
-                    unsafe_allow_html=True)
-
-# Trading hours check
-is_trading = (
-    now.weekday() in {0, 1, 2, 3, 4}
-    and now.hour >= 9 and now.hour < 18
+st.sidebar.markdown(
+    f'<div class="sidebar-info">🕐 {now.strftime("%H:%M")} &nbsp;·&nbsp; '
+    f'יום {day_he} &nbsp;·&nbsp; {now.strftime("%d/%m/%Y")}</div>',
+    unsafe_allow_html=True,
 )
+
+is_trading = now.weekday() in {0, 1, 2, 3, 4} and 9 <= now.hour < 18
 if is_trading:
     st.sidebar.markdown(
-        '<div style="background:#0d2818; border:1px solid #00d4aa; border-radius:8px; '
-        'padding:8px 12px; text-align:center; margin:8px 0;">'
-        '<span class="status-online">🟢 מערכת פעילה — שעות מסחר</span></div>',
+        '<div class="status-badge online">🟢 מערכת פעילה</div>',
         unsafe_allow_html=True)
 else:
     st.sidebar.markdown(
-        '<div style="background:#2a1215; border:1px solid #ff6b6b; border-radius:8px; '
-        'padding:8px 12px; text-align:center; margin:8px 0;">'
-        '<span class="status-offline">🔴 מחוץ לשעות מסחר</span></div>',
+        '<div class="status-badge offline">🔴 מחוץ לשעות מסחר</div>',
         unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
@@ -273,18 +234,26 @@ page = st.sidebar.radio(
     ["📈 מוניטור חי", "🎯 אסטרטגיות שבועיות", "📊 ביצועים היסטוריים"],
 )
 
+st.sidebar.markdown("---")
+st.sidebar.markdown(
+    '<div class="sidebar-info" style="opacity:0.5; font-size:12px;">'
+    '🤖 TASE Pipeline v2.0<br>Render · Supabase · Telegram</div>',
+    unsafe_allow_html=True)
+
+
 # ==================================================================
-# SECTION 1: LIVE MONITOR
+# PAGE 1: LIVE MONITOR
 # ==================================================================
 if page == "📈 מוניטור חי":
-    st.title("📈 מוניטור חי — TA-35 Put/Call")
+    st.markdown('<div class="section-title">📈 מוניטור חי — נתוני Put/Call</div>',
+                unsafe_allow_html=True)
 
     df = fetch_table("tase_putcall")
 
     if df.empty:
         st.warning("אין נתונים זמינים כרגע")
     else:
-        # Extract index value
+        # Extract values
         index_val = 0.0
         for col in ["underlingasset_call", "underlingasset_put"]:
             if col in df.columns:
@@ -294,79 +263,83 @@ if page == "📈 מוניטור חי":
                     index_val = vals.iloc[0]
                     break
 
-        # Extract metadata
-        fetch_date = df["fetch_date"].iloc[0] if "fetch_date" in df.columns else ""
+        fetch_date = df["fetch_date"].iloc[0] if "fetch_date" in df.columns else "—"
         fetch_time = df["fetch_time"].iloc[0] if "fetch_time" in df.columns else ""
-        expiry = df["expiry_date"].iloc[0] if "expiry_date" in df.columns else ""
+        num_expiries = df["expiry_date"].nunique() if "expiry_date" in df.columns else 0
         num_rows = len(df)
 
-        # KPI cards
-        col1, col2, col3, col4 = st.columns(4)
+        # KPI row — HTML cards
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.markdown(kpi_card("מדד TA-35", f"{index_val:,.2f}"), unsafe_allow_html=True)
+        with c2:
+            st.markdown(kpi_card("עדכון אחרון", f"{fetch_time}", small=True), unsafe_allow_html=True)
+        with c3:
+            st.markdown(kpi_card("ימי פקיעה", str(num_expiries)), unsafe_allow_html=True)
+        with c4:
+            st.markdown(kpi_card("רשומות", str(num_rows)), unsafe_allow_html=True)
 
-        with col1:
-            st.metric("מדד TA-35", f"{index_val:,.2f}")
-        with col2:
-            st.metric("עדכון אחרון", f"{fetch_date} {fetch_time}")
-        with col3:
-            st.metric("פקיעה", expiry)
-        with col4:
-            st.metric("רשומות", num_rows)
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        st.markdown("---")
+        # Expiry filter
+        if "expiry_date" in df.columns:
+            expiries = sorted(df["expiry_date"].unique())
+            labels = []
+            for e in expiries:
+                try:
+                    d = date.fromisoformat(e)
+                    labels.append(f"יום {DAY_NAMES_HE.get(d.weekday(), '')} — {e}")
+                except Exception:
+                    labels.append(e)
 
-        # Filters
-        st.subheader("נתוני Put/Call")
+            selected_label = st.selectbox("בחר יום פקיעה", labels, index=0)
+            selected_expiry = expiries[labels.index(selected_label)]
+            df_filtered = df[df["expiry_date"] == selected_expiry].copy()
+        else:
+            df_filtered = df.copy()
 
-        # Select important columns
-        display_cols = []
+        # Columns to display
         wanted = [
-            "expiry_date", "derivativename_call", "expirationprice_call",
-            "lastrate_call", "delta_call", "openpositions_call",
+            "derivativename_call", "expirationprice_call",
+            "lastrate_call", "openpositions_call",
             "derivativename_put", "expirationprice_put",
-            "lastrate_put", "delta_put", "openpositions_put",
+            "lastrate_put", "openpositions_put",
         ]
-        for c in wanted:
-            if c in df.columns:
-                display_cols.append(c)
+        display_cols = [c for c in wanted if c in df_filtered.columns]
 
         if display_cols:
-            display_df = df[display_cols].copy()
-
-            # Rename columns for display
+            display_df = df_filtered[display_cols].copy()
             rename_map = {
-                "expiry_date": "פקיעה",
                 "derivativename_call": "שם Call",
                 "expirationprice_call": "Strike Call",
                 "lastrate_call": "מחיר Call",
-                "delta_call": "דלתא Call",
                 "openpositions_call": "פוזיציות Call",
                 "derivativename_put": "שם Put",
                 "expirationprice_put": "Strike Put",
                 "lastrate_put": "מחיר Put",
-                "delta_put": "דלתא Put",
                 "openpositions_put": "פוזיציות Put",
             }
             display_df = display_df.rename(
                 columns={k: v for k, v in rename_map.items() if k in display_df.columns}
             )
-            st.dataframe(display_df, use_container_width=True, height=500)
+            st.dataframe(display_df, use_container_width=True, height=500, hide_index=True)
         else:
-            st.dataframe(df, use_container_width=True, height=500)
+            st.dataframe(df_filtered, use_container_width=True, height=500, hide_index=True)
 
 
 # ==================================================================
-# SECTION 2: ACTIVE WEEKLY STRATEGIES
+# PAGE 2: STRATEGIES
 # ==================================================================
 elif page == "🎯 אסטרטגיות שבועיות":
-    st.title("🎯 אסטרטגיות Iron Condor — השבוע")
+    st.markdown('<div class="section-title">🎯 אסטרטגיות Iron Condor — שבועי</div>',
+                unsafe_allow_html=True)
 
     df_strat = fetch_table("iron_condor_strategies",
                            "&order=trigger_date.desc,expiry_date,interval_pct")
 
     if df_strat.empty:
-        st.info("אין אסטרטגיות עדיין. האסטרטגיה הראשונה תחושב ביום שני הקרוב ב-12:00.")
+        st.info("אין אסטרטגיות עדיין. הראשונה תיווצר ביום מסחר הקרוב ב-12:00.")
     else:
-        # Get current week strategies
         today = date.today()
         monday = today - timedelta(days=today.weekday())
         friday = monday + timedelta(days=4)
@@ -378,12 +351,11 @@ elif page == "🎯 אסטרטגיות שבועיות":
         ].copy()
 
         if df_week.empty:
-            # Show latest available
             latest_date = df_strat["trigger_date"].max()
             df_week = df_strat[df_strat["trigger_date"] == latest_date].copy()
-            st.info(f"אין אסטרטגיות השבוע. מציג אחרון זמין: {latest_date}")
+            st.info(f"אין אסטרטגיות השבוע. מציג: {latest_date}")
 
-        # Get current index for comparison
+        # Current index
         df_live = fetch_table("tase_putcall")
         current_index = 0.0
         if not df_live.empty:
@@ -396,142 +368,122 @@ elif page == "🎯 אסטרטגיות שבועיות":
                         break
 
         if current_index > 0:
-            st.metric("מדד TA-35 נוכחי", f"{current_index:,.2f}")
+            st.markdown(kpi_card("מדד TA-35 נוכחי", f"{current_index:,.2f}"),
+                        unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
 
-        st.markdown("---")
-
-        # Group by expiry date
-        expiry_dates = sorted(df_week["expiry_date"].unique())
-
-        day_names_he = {
-            0: "שני", 1: "שלישי", 2: "רביעי",
-            3: "חמישי", 4: "שישי",
-        }
-
-        for exp_date in expiry_dates:
+        # Group by expiry
+        for exp_date in sorted(df_week["expiry_date"].unique()):
             try:
                 exp_d = date.fromisoformat(exp_date)
-                day_name = day_names_he.get(exp_d.weekday(), "")
+                day_name = DAY_NAMES_HE.get(exp_d.weekday(), "")
             except Exception:
                 day_name = ""
 
             df_exp = df_week[df_week["expiry_date"] == exp_date].sort_values("interval_pct")
 
-            # Check if settled
-            has_result = df_exp["result_status"].notna().any() if "result_status" in df_exp.columns else False
+            has_result = (df_exp["result_status"].notna().any()
+                          if "result_status" in df_exp.columns else False)
+            settled = " ✅" if has_result else ""
 
-            header = f"📅 יום {day_name} — {exp_date}"
-            if has_result:
-                header += " ✅ נסגר"
+            st.markdown(
+                f'<div class="section-title" style="font-size:18px; margin-top:10px;">'
+                f'📅 יום {day_name} — {exp_date}{settled}</div>',
+                unsafe_allow_html=True)
 
-            st.subheader(header)
-
-            # Display variations
-            cols_display = []
+            rows = []
             for _, row in df_exp.iterrows():
                 pct = clean_numeric(row.get("interval_pct", 0))
-                sp = clean_numeric(row.get("short_put_strike", 0))
-                sc = clean_numeric(row.get("short_call_strike", 0))
-                lp = clean_numeric(row.get("long_put_strike", 0))
-                lc = clean_numeric(row.get("long_call_strike", 0))
-                premium = clean_numeric(row.get("total_net_premium", 0))
-                profit = clean_numeric(row.get("max_profit_ils", 0))
-                risk = clean_numeric(row.get("max_risk_ils", 0))
-                rr = clean_numeric(row.get("risk_reward_ratio", 0))
                 result = row.get("result_status", None)
                 pnl = clean_numeric(row.get("actual_pnl_ils", 0))
 
-                cols_display.append({
-                    "מרווח %": f"{pct}%",
-                    "Long Put": f"{lp:.0f}",
-                    "Short Put": f"{sp:.0f}",
-                    "Short Call": f"{sc:.0f}",
-                    "Long Call": f"{lc:.0f}",
-                    "פרמיה": f"{premium:.2f}",
-                    "רווח מקס ₪": f"{profit:.0f}",
-                    "סיכון מקס ₪": f"{risk:.0f}",
-                    "R/R": f"{rr:.2f}",
-                    "תוצאה": result or "פתוח",
-                    "P&L ₪": f"{pnl:+,.0f}" if result else "—",
+                rows.append({
+                    "מרווח": f"{pct}%",
+                    "Long Put": f'{clean_numeric(row.get("long_put_strike", 0)):.0f}',
+                    "Short Put": f'{clean_numeric(row.get("short_put_strike", 0)):.0f}',
+                    "Short Call": f'{clean_numeric(row.get("short_call_strike", 0)):.0f}',
+                    "Long Call": f'{clean_numeric(row.get("long_call_strike", 0)):.0f}',
+                    "פרמיה": f'{clean_numeric(row.get("total_net_premium", 0)):.2f}',
+                    "רווח מקס": f'{clean_numeric(row.get("max_profit_ils", 0)):,.0f} ₪',
+                    "סיכון מקס": f'{clean_numeric(row.get("max_risk_ils", 0)):,.0f} ₪',
+                    "תוצאה": result or "⏳ פתוח",
+                    "P&L": f"{pnl:+,.0f} ₪" if result else "—",
                 })
 
-            df_display = pd.DataFrame(cols_display)
-            st.dataframe(df_display, use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-            # Visual: where is the index relative to strikes?
+            # Position indicator
             if current_index > 0 and not df_exp.empty:
-                mid_row = df_exp.iloc[len(df_exp) // 2]
-                sp_mid = clean_numeric(mid_row.get("short_put_strike", 0))
-                sc_mid = clean_numeric(mid_row.get("short_call_strike", 0))
-
-                if sp_mid > 0 and sc_mid > 0:
-                    if sp_mid <= current_index <= sc_mid:
-                        st.success(f"✅ מדד {current_index:,.2f} בטווח הרווח ({sp_mid:.0f}–{sc_mid:.0f})")
-                    elif current_index < sp_mid:
-                        diff = sp_mid - current_index
-                        st.warning(f"⚠️ מדד {current_index:,.2f} מתחת ל-Short Put ({sp_mid:.0f}) ב-{diff:.0f} נקודות")
+                mid = df_exp.iloc[len(df_exp) // 2]
+                sp = clean_numeric(mid.get("short_put_strike", 0))
+                sc = clean_numeric(mid.get("short_call_strike", 0))
+                if sp > 0 and sc > 0:
+                    if sp <= current_index <= sc:
+                        st.success(f"✅ מדד {current_index:,.2f} בטווח הרווח ({sp:.0f} – {sc:.0f})")
+                    elif current_index < sp:
+                        st.warning(f"⚠️ מדד {current_index:,.2f} מתחת ל-Short Put ({sp:.0f})")
                     else:
-                        diff = current_index - sc_mid
-                        st.warning(f"⚠️ מדד {current_index:,.2f} מעל ל-Short Call ({sc_mid:.0f}) ב-{diff:.0f} נקודות")
+                        st.warning(f"⚠️ מדד {current_index:,.2f} מעל ל-Short Call ({sc:.0f})")
 
             st.markdown("---")
 
 
 # ==================================================================
-# SECTION 3: HISTORICAL PERFORMANCE
+# PAGE 3: HISTORICAL PERFORMANCE
 # ==================================================================
 elif page == "📊 ביצועים היסטוריים":
-    st.title("📊 ביצועים היסטוריים — Iron Condor")
+    st.markdown('<div class="section-title">📊 ביצועים היסטוריים — Iron Condor</div>',
+                unsafe_allow_html=True)
 
     df_hist = fetch_table("iron_condor_strategies",
                           "&result_status=not.is.null&order=trigger_date,interval_pct")
 
     if df_hist.empty:
-        st.info("אין תוצאות היסטוריות עדיין. התוצאות הראשונות יופיעו אחרי פקיעה ראשונה.")
+        st.info("אין תוצאות היסטוריות עדיין. יופיעו אחרי הפקיעה הראשונה.")
     else:
-        # Clean numeric columns
         for col in ["actual_pnl_ils", "max_profit_ils", "max_risk_ils", "interval_pct"]:
             if col in df_hist.columns:
                 df_hist[col] = df_hist[col].apply(clean_numeric)
 
-        # KPI Cards
         total_pnl = df_hist["actual_pnl_ils"].sum()
         total_trades = len(df_hist)
         wins = len(df_hist[df_hist["actual_pnl_ils"] > 0])
         win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
 
-        col1, col2, col3 = st.columns(3)
+        # KPI cards
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            color = "#4ade80" if total_pnl >= 0 else "#f87171"
+            st.markdown(f"""
+            <div class="kpi-card">
+                <div class="kpi-label">סה״כ P&L</div>
+                <div class="kpi-value" style="color:{color}">₪{total_pnl:+,.0f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c2:
+            st.markdown(kpi_card("אחוז הצלחה", f"{win_rate:.0f}%"), unsafe_allow_html=True)
+        with c3:
+            st.markdown(kpi_card("עסקאות סגורות", f"{wins}/{total_trades}"), unsafe_allow_html=True)
 
-        with col1:
-            pnl_color = "profit" if total_pnl >= 0 else "loss"
-            st.metric("סה״כ P&L מצטבר",
-                      f"₪{total_pnl:+,.0f}",
-                      delta=f"{'רווח' if total_pnl >= 0 else 'הפסד'}")
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        with col2:
-            st.metric("אחוז הצלחה", f"{win_rate:.1f}%",
-                      delta=f"{wins}/{total_trades} עסקאות")
-
-        with col3:
-            st.metric("סה״כ עסקאות סגורות", total_trades)
-
-        st.markdown("---")
-
-        # Chart 1: Cumulative P&L over time
-        st.subheader("📈 P&L מצטבר לאורך זמן")
+        # Cumulative P&L chart
+        st.markdown('<div class="section-title" style="font-size:18px;">📈 P&L מצטבר</div>',
+                    unsafe_allow_html=True)
 
         df_by_date = df_hist.groupby("trigger_date")["actual_pnl_ils"].sum().reset_index()
-        df_by_date.columns = ["תאריך", "P&L"]
-        df_by_date["P&L מצטבר"] = df_by_date["P&L"].cumsum()
-        df_by_date = df_by_date.set_index("תאריך")
+        df_by_date.columns = ["date", "pnl"]
+        df_by_date["cumulative"] = df_by_date["pnl"].cumsum()
+        df_by_date = df_by_date.set_index("date")
 
-        st.bar_chart(df_by_date["P&L"], color="#00d4aa")
-        st.line_chart(df_by_date["P&L מצטבר"], color="#4dabf7")
+        st.bar_chart(df_by_date["pnl"], color="#00d4aa")
+        st.line_chart(df_by_date["cumulative"], color="#4dabf7")
 
         st.markdown("---")
 
-        # Chart 2: P&L by interval percentage
-        st.subheader("📊 ביצועים לפי אחוז מרווח")
+        # By interval
+        st.markdown('<div class="section-title" style="font-size:18px;">📊 ביצועים לפי מרווח</div>',
+                    unsafe_allow_html=True)
 
         df_by_pct = df_hist.groupby("interval_pct").agg(
             total_pnl=("actual_pnl_ils", "sum"),
@@ -540,19 +492,16 @@ elif page == "📊 ביצועים היסטוריים":
             wins=("actual_pnl_ils", lambda x: (x > 0).sum()),
         ).reset_index()
         df_by_pct["win_rate"] = (df_by_pct["wins"] / df_by_pct["trades"] * 100).round(1)
-        df_by_pct.columns = ["מרווח %", "סה״כ P&L ₪", "ממוצע P&L ₪",
-                             "עסקאות", "ניצחונות", "אחוז הצלחה %"]
+        df_by_pct.columns = ["מרווח %", "סה״כ P&L", "ממוצע P&L",
+                             "עסקאות", "ניצחונות", "הצלחה %"]
 
         st.dataframe(df_by_pct, use_container_width=True, hide_index=True)
 
-        # Bar chart of total P&L by interval
-        chart_data = df_by_pct.set_index("מרווח %")["סה״כ P&L ₪"]
-        st.bar_chart(chart_data, color="#4dabf7")
-
         st.markdown("---")
 
-        # Detailed history table
-        st.subheader("📋 היסטוריית עסקאות מלאה")
+        # Full history table
+        st.markdown('<div class="section-title" style="font-size:18px;">📋 כל העסקאות</div>',
+                    unsafe_allow_html=True)
 
         detail_cols = [
             "trigger_date", "expiry_date", "interval_pct",
@@ -563,8 +512,8 @@ elif page == "📊 ביצועים היסטוריים":
         df_detail = df_hist[available].copy()
 
         rename = {
-            "trigger_date": "תאריך טריגר",
-            "expiry_date": "תאריך פקיעה",
+            "trigger_date": "תאריך",
+            "expiry_date": "פקיעה",
             "interval_pct": "מרווח %",
             "short_put_strike": "Short Put",
             "short_call_strike": "Short Call",
@@ -574,15 +523,3 @@ elif page == "📊 ביצועים היסטוריים":
         }
         df_detail = df_detail.rename(columns={k: v for k, v in rename.items() if k in df_detail.columns})
         st.dataframe(df_detail, use_container_width=True, height=400, hide_index=True)
-
-
-# ------------------------------------------------------------------
-# Footer
-# ------------------------------------------------------------------
-st.sidebar.markdown("---")
-st.sidebar.markdown("""
-<div style="text-align:center; padding:10px 0; opacity:0.6;">
-    <small>🤖 TASE Pipeline v2.0</small><br>
-    <small>Render + Supabase + Telegram</small>
-</div>
-""", unsafe_allow_html=True)
