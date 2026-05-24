@@ -23,19 +23,140 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------------
-# Dark theme CSS
+# RTL + Dark Premium CSS
 # ------------------------------------------------------------------
 st.markdown("""
 <style>
-    .main { background-color: #0e1117; }
-    .stMetric { background-color: #1a1f2e; padding: 15px; border-radius: 10px; border: 1px solid #2d3748; }
-    .big-metric { font-size: 48px; font-weight: bold; color: #00d4aa; text-align: center; }
-    .sub-metric { font-size: 14px; color: #8892a0; text-align: center; }
-    .status-online { color: #00d4aa; font-weight: bold; }
-    .status-offline { color: #ff6b6b; font-weight: bold; }
-    .profit { color: #00d4aa; }
-    .loss { color: #ff6b6b; }
-    div[data-testid="stDataFrame"] { border: 1px solid #2d3748; border-radius: 8px; }
+    /* === RTL global === */
+    html, body, [data-testid="stAppViewContainer"],
+    [data-testid="stSidebar"], .main, .block-container,
+    [data-testid="stMarkdownContainer"], [data-testid="stMetricValue"],
+    [data-testid="stMetricLabel"], [data-testid="stMetricDelta"] {
+        direction: rtl !important;
+        text-align: right !important;
+    }
+
+    /* Sidebar RTL */
+    [data-testid="stSidebar"] > div:first-child {
+        direction: rtl !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stRadio"] label {
+        direction: rtl !important;
+        text-align: right !important;
+    }
+
+    /* === Dark premium background === */
+    .main, [data-testid="stAppViewContainer"] {
+        background: linear-gradient(135deg, #0a0e1a 0%, #111827 50%, #0f172a 100%) !important;
+    }
+    [data-testid="stSidebar"] > div:first-child {
+        background: linear-gradient(180deg, #0d1321 0%, #141c2e 100%) !important;
+        border-left: 1px solid #1e293b;
+    }
+
+    /* === Header styling === */
+    h1 {
+        background: linear-gradient(90deg, #00d4aa, #4dabf7) !important;
+        -webkit-background-clip: text !important;
+        -webkit-text-fill-color: transparent !important;
+        font-weight: 800 !important;
+        font-size: 2rem !important;
+        padding-bottom: 8px !important;
+    }
+    h2, h3 {
+        color: #e2e8f0 !important;
+        font-weight: 600 !important;
+        border-bottom: 2px solid #1e293b;
+        padding-bottom: 6px;
+    }
+
+    /* === KPI metric cards === */
+    [data-testid="stMetric"] {
+        background: linear-gradient(145deg, #1a2236 0%, #141c2e 100%) !important;
+        border: 1px solid #2d3a52 !important;
+        border-radius: 14px !important;
+        padding: 20px 18px !important;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3) !important;
+        transition: transform 0.2s, box-shadow 0.2s !important;
+    }
+    [data-testid="stMetric"]:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 6px 20px rgba(0, 212, 170, 0.15) !important;
+    }
+    [data-testid="stMetricValue"] {
+        color: #00d4aa !important;
+        font-size: 1.6rem !important;
+        font-weight: 700 !important;
+    }
+    [data-testid="stMetricLabel"] {
+        color: #94a3b8 !important;
+        font-size: 0.85rem !important;
+        font-weight: 500 !important;
+        letter-spacing: 0.3px;
+    }
+    [data-testid="stMetricDelta"] {
+        font-size: 0.8rem !important;
+    }
+
+    /* === DataFrames === */
+    div[data-testid="stDataFrame"] {
+        border: 1px solid #1e293b !important;
+        border-radius: 12px !important;
+        overflow: hidden !important;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2) !important;
+    }
+    div[data-testid="stDataFrame"] table {
+        direction: rtl !important;
+    }
+
+    /* === Buttons === */
+    .stButton > button {
+        background: linear-gradient(135deg, #00d4aa 0%, #00b894 100%) !important;
+        color: #0a0e1a !important;
+        border: none !important;
+        border-radius: 10px !important;
+        font-weight: 700 !important;
+        padding: 10px 24px !important;
+        transition: all 0.3s !important;
+    }
+    .stButton > button:hover {
+        transform: scale(1.03) !important;
+        box-shadow: 0 4px 15px rgba(0, 212, 170, 0.35) !important;
+    }
+
+    /* === Status badges === */
+    .status-online {
+        color: #00d4aa;
+        font-weight: bold;
+        text-shadow: 0 0 8px rgba(0, 212, 170, 0.4);
+    }
+    .status-offline {
+        color: #ff6b6b;
+        font-weight: bold;
+        text-shadow: 0 0 8px rgba(255, 107, 107, 0.4);
+    }
+    .profit { color: #00d4aa !important; }
+    .loss { color: #ff6b6b !important; }
+
+    /* === Success/warning/info boxes === */
+    [data-testid="stAlert"] {
+        border-radius: 10px !important;
+        direction: rtl !important;
+    }
+
+    /* === Dividers === */
+    hr {
+        border-color: #1e293b !important;
+        opacity: 0.5 !important;
+    }
+
+    /* === Radio buttons alignment === */
+    [data-testid="stRadio"] > div {
+        direction: rtl !important;
+    }
+
+    /* === Hide Streamlit branding === */
+    #MainMenu, footer, header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -85,12 +206,25 @@ def clean_numeric(val):
 # ------------------------------------------------------------------
 # Sidebar
 # ------------------------------------------------------------------
-st.sidebar.title("📊 TASE TA-35")
+st.sidebar.markdown("""
+<div style="text-align:center; padding: 10px 0 5px;">
+    <span style="font-size: 2.2rem;">📊</span><br>
+    <span style="font-size: 1.3rem; font-weight: 800;
+                 background: linear-gradient(90deg, #00d4aa, #4dabf7);
+                 -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+        TASE TA-35
+    </span>
+</div>
+""", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 now = datetime.now(TZ_ISRAEL)
-st.sidebar.markdown(f"**זמן נוכחי:** {now.strftime('%H:%M:%S')}")
-st.sidebar.markdown(f"**תאריך:** {now.strftime('%Y-%m-%d')}")
+
+day_names_he = {0: "שני", 1: "שלישי", 2: "רביעי", 3: "חמישי", 4: "שישי", 5: "שבת", 6: "ראשון"}
+day_he = day_names_he.get(now.weekday(), "")
+
+st.sidebar.markdown(f"**🕐 {now.strftime('%H:%M:%S')}** &nbsp;|&nbsp; **יום {day_he}** {now.strftime('%d/%m/%Y')}",
+                    unsafe_allow_html=True)
 
 # Trading hours check
 is_trading = (
@@ -98,11 +232,17 @@ is_trading = (
     and now.hour >= 9 and now.hour < 18
 )
 if is_trading:
-    st.sidebar.markdown('<p class="status-online">● מערכת פעילה</p>',
-                        unsafe_allow_html=True)
+    st.sidebar.markdown(
+        '<div style="background:#0d2818; border:1px solid #00d4aa; border-radius:8px; '
+        'padding:8px 12px; text-align:center; margin:8px 0;">'
+        '<span class="status-online">🟢 מערכת פעילה — שעות מסחר</span></div>',
+        unsafe_allow_html=True)
 else:
-    st.sidebar.markdown('<p class="status-offline">● מחוץ לשעות מסחר</p>',
-                        unsafe_allow_html=True)
+    st.sidebar.markdown(
+        '<div style="background:#2a1215; border:1px solid #ff6b6b; border-radius:8px; '
+        'padding:8px 12px; text-align:center; margin:8px 0;">'
+        '<span class="status-offline">🔴 מחוץ לשעות מסחר</span></div>',
+        unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
 
@@ -422,5 +562,9 @@ elif page == "📊 ביצועים היסטוריים":
 # Footer
 # ------------------------------------------------------------------
 st.sidebar.markdown("---")
-st.sidebar.markdown("🤖 **TASE Pipeline v2.0**")
-st.sidebar.markdown("Render + Supabase + Telegram")
+st.sidebar.markdown("""
+<div style="text-align:center; padding:10px 0; opacity:0.6;">
+    <small>🤖 TASE Pipeline v2.0</small><br>
+    <small>Render + Supabase + Telegram</small>
+</div>
+""", unsafe_allow_html=True)
