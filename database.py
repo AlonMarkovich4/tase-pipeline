@@ -253,3 +253,73 @@ def copy_to_history(max_retries: int = 3) -> bool:
     else:
         logger.error("History save partial: %d/%d rows", total_ok, len(rows))
         return False
+
+
+# ------------------------------------------------------------------
+def backup_to_storage() -> bool:
+    """
+    Weekly backup: export history + strategies tables as CSV
+    and upload to Supabase Storage bucket 'backups'.
+    The bucket must be created manually in Supabase Dashboard.
+    """
+    _ensure_init()
+    import csv
+    import io
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    today = datetime.now(ZoneInfo("Asia/Jerusalem")).strftime("%Y-%m-%d")
+    tables = [_history_table, "iron_condor_strategies"]
+    success = 0
+
+    for table in tables:
+        # 1. Read all rows
+        try:
+            url = f"{_base_url}/rest/v1/{table}?select=*&order=id"
+            r = httpx.get(url, headers=_headers(), timeout=30)
+            if r.status_code not in (200, 206):
+                logger.warning("Backup read %s: HTTP %d", table, r.status_code)
+                continue
+            rows = r.json()
+        except Exception as e:
+            logger.warning("Backup read %s error: %s", table, e)
+            continue
+
+        if not rows:
+            logger.info("Backup %s: no rows, skipping", table)
+            continue
+
+        # 2. Convert to CSV
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+        csv_bytes = buf.getvalue().encode("utf-8")
+
+        # 3. Upload to Supabase Storage
+        filename = f"{table}_{today}.csv"
+        storage_url = (
+            f"{_base_url}/storage/v1/object/backups/{filename}"
+        )
+        upload_headers = {
+            "apikey": _api_key,
+            "Authorization": f"Bearer {_api_key}",
+            "Content-Type": "text/csv",
+            "x-upsert": "true",
+        }
+
+        try:
+            r = httpx.post(storage_url, headers=upload_headers,
+                           content=csv_bytes, timeout=30)
+            if r.status_code in (200, 201):
+                logger.info("Backup %s OK: %s (%d rows, %.1f KB)",
+                            table, filename, len(rows),
+                            len(csv_bytes) / 1024)
+                success += 1
+            else:
+                logger.warning("Backup upload %s: HTTP %d — %s",
+                               table, r.status_code, r.text[:200])
+        except Exception as e:
+            logger.warning("Backup upload %s error: %s", table, e)
+
+    return success == len(tables)

@@ -170,7 +170,7 @@ def recover_session(pw, browser, context, page):
 # TASE API helpers
 # ------------------------------------------------------------------
 
-def _get_expiry_dates(page) -> list:
+def _get_expiry_dates(page, max_retries: int = 3) -> list:
     js = """
     async (url) => {
         try {
@@ -185,9 +185,20 @@ def _get_expiry_dates(page) -> list:
         } catch(e) { return { error: e.message }; }
     }
     """
-    result = page.evaluate(js, EXPIRY_URL)
+    result = None
+    for attempt in range(1, max_retries + 1):
+        result = page.evaluate(js, EXPIRY_URL)
+        if not result.get("error"):
+            break
+        wait = min(5 * (2 ** (attempt - 1)), 45)  # 5s, 10s, 20s
+        logger.warning("Expiry-dates API (attempt %d/%d): %s — retry in %ds",
+                       attempt, max_retries, result["error"], wait)
+        if attempt < max_retries:
+            time.sleep(wait)
+
     if result.get("error"):
-        logger.warning("Expiry-dates API: %s", result["error"])
+        logger.warning("Expiry-dates API failed after %d attempts: %s",
+                       max_retries, result["error"])
         return []
 
     items = (result.get("data") or {}).get(
@@ -247,15 +258,24 @@ def _fetch_all_pages(page, expr_date_iso: str):
             } catch(e) { return {error: e.message}; }
         }
         """
-        result = page.evaluate(js, {
-            "url":      API_URL,
-            "exprDate": expr_date_iso,
-            "totalRec": 1 if page_num == 1 else len(all_items),
-            "pageNum":  page_num,
-        })
+        result = None
+        for attempt in range(1, 4):
+            result = page.evaluate(js, {
+                "url":      API_URL,
+                "exprDate": expr_date_iso,
+                "totalRec": 1 if page_num == 1 else len(all_items),
+                "pageNum":  page_num,
+            })
+            if not result.get("error"):
+                break
+            wait = min(5 * (2 ** (attempt - 1)), 30)
+            logger.warning("putvscall page %d (attempt %d/3): %s — retry in %ds",
+                           page_num, attempt, result["error"], wait)
+            if attempt < 3:
+                time.sleep(wait)
 
         if result.get("error"):
-            logger.warning("putvscall page %d: %s",
+            logger.warning("putvscall page %d failed after 3 attempts: %s",
                            page_num, result["error"])
             break
 
@@ -426,6 +446,13 @@ def main():
                             weekly_summary_week = current_week
                     except Exception as we:
                         logger.error("Weekly summary error: %s", we, exc_info=True)
+
+                    # Weekly backup to Supabase Storage
+                    try:
+                        logger.info("*** Weekly backup to storage ***")
+                        db.backup_to_storage()
+                    except Exception as be:
+                        logger.error("Backup error: %s", be, exc_info=True)
 
                 if ok and is_last_cycle(now):
                     logger.info("*** Last cycle of the day — saving to history ***")
