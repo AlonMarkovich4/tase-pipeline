@@ -27,34 +27,49 @@ st.set_page_config(
 # ------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* === RTL global === */
-    html, body, [data-testid="stAppViewContainer"],
-    [data-testid="stSidebar"], .main, .block-container,
-    [data-testid="stMarkdownContainer"], [data-testid="stMetricValue"],
-    [data-testid="stMetricLabel"], [data-testid="stMetricDelta"] {
+    /* ============================================
+       RTL — flip sidebar to the right
+       ============================================ */
+    [data-testid="stSidebar"] {
+        right: 0 !important;
+        left: auto !important;
+        direction: rtl !important;
+        border-right: none !important;
+        border-left: 1px solid #1e293b !important;
+    }
+    /* push main content to the left */
+    .main .block-container {
+        direction: rtl !important;
+        text-align: right !important;
+    }
+    [data-testid="stAppViewContainer"] {
+        direction: rtl !important;
+    }
+    /* all text elements RTL */
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stMetricValue"],
+    [data-testid="stMetricLabel"],
+    [data-testid="stMetricDelta"],
+    [data-testid="stAlert"],
+    [data-testid="stRadio"] label,
+    [data-testid="stRadio"] > div {
         direction: rtl !important;
         text-align: right !important;
     }
 
-    /* Sidebar RTL */
-    [data-testid="stSidebar"] > div:first-child {
-        direction: rtl !important;
-    }
-    [data-testid="stSidebar"] [data-testid="stRadio"] label {
-        direction: rtl !important;
-        text-align: right !important;
-    }
-
-    /* === Dark premium background === */
+    /* ============================================
+       Dark premium backgrounds
+       ============================================ */
     .main, [data-testid="stAppViewContainer"] {
         background: linear-gradient(135deg, #0a0e1a 0%, #111827 50%, #0f172a 100%) !important;
     }
     [data-testid="stSidebar"] > div:first-child {
         background: linear-gradient(180deg, #0d1321 0%, #141c2e 100%) !important;
-        border-left: 1px solid #1e293b;
     }
 
-    /* === Header styling === */
+    /* ============================================
+       Headers
+       ============================================ */
     h1 {
         background: linear-gradient(90deg, #00d4aa, #4dabf7) !important;
         -webkit-background-clip: text !important;
@@ -70,14 +85,18 @@ st.markdown("""
         padding-bottom: 6px;
     }
 
-    /* === KPI metric cards === */
+    /* ============================================
+       KPI metric cards
+       ============================================ */
     [data-testid="stMetric"] {
         background: linear-gradient(145deg, #1a2236 0%, #141c2e 100%) !important;
         border: 1px solid #2d3a52 !important;
         border-radius: 14px !important;
-        padding: 20px 18px !important;
+        padding: 22px 20px !important;
         box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3) !important;
         transition: transform 0.2s, box-shadow 0.2s !important;
+        direction: rtl !important;
+        text-align: center !important;
     }
     [data-testid="stMetric"]:hover {
         transform: translateY(-2px) !important;
@@ -85,31 +104,36 @@ st.markdown("""
     }
     [data-testid="stMetricValue"] {
         color: #00d4aa !important;
-        font-size: 1.6rem !important;
+        font-size: 1.5rem !important;
         font-weight: 700 !important;
+        text-align: center !important;
+        direction: ltr !important;
     }
     [data-testid="stMetricLabel"] {
         color: #94a3b8 !important;
-        font-size: 0.85rem !important;
-        font-weight: 500 !important;
-        letter-spacing: 0.3px;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        text-align: center !important;
+        margin-bottom: 4px !important;
     }
     [data-testid="stMetricDelta"] {
         font-size: 0.8rem !important;
+        text-align: center !important;
     }
 
-    /* === DataFrames === */
+    /* ============================================
+       DataFrames
+       ============================================ */
     div[data-testid="stDataFrame"] {
         border: 1px solid #1e293b !important;
         border-radius: 12px !important;
         overflow: hidden !important;
         box-shadow: 0 2px 10px rgba(0,0,0,0.2) !important;
     }
-    div[data-testid="stDataFrame"] table {
-        direction: rtl !important;
-    }
 
-    /* === Buttons === */
+    /* ============================================
+       Buttons
+       ============================================ */
     .stButton > button {
         background: linear-gradient(135deg, #00d4aa 0%, #00b894 100%) !important;
         color: #0a0e1a !important;
@@ -117,6 +141,7 @@ st.markdown("""
         border-radius: 10px !important;
         font-weight: 700 !important;
         padding: 10px 24px !important;
+        width: 100% !important;
         transition: all 0.3s !important;
     }
     .stButton > button:hover {
@@ -124,7 +149,9 @@ st.markdown("""
         box-shadow: 0 4px 15px rgba(0, 212, 170, 0.35) !important;
     }
 
-    /* === Status badges === */
+    /* ============================================
+       Status badges
+       ============================================ */
     .status-online {
         color: #00d4aa;
         font-weight: bold;
@@ -138,25 +165,16 @@ st.markdown("""
     .profit { color: #00d4aa !important; }
     .loss { color: #ff6b6b !important; }
 
-    /* === Success/warning/info boxes === */
-    [data-testid="stAlert"] {
-        border-radius: 10px !important;
-        direction: rtl !important;
-    }
-
-    /* === Dividers === */
+    /* ============================================
+       Misc
+       ============================================ */
     hr {
         border-color: #1e293b !important;
         opacity: 0.5 !important;
     }
 
-    /* === Radio buttons alignment === */
-    [data-testid="stRadio"] > div {
-        direction: rtl !important;
-    }
-
-    /* === Hide Streamlit branding === */
-    #MainMenu, footer, header {visibility: hidden;}
+    /* Hide Streamlit branding */
+    #MainMenu, footer, header { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
