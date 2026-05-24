@@ -35,6 +35,7 @@ RENDER_WAIT     = 6
 BROWSER_RESTART = 6 * 3600  # restart browser every 6h
 STRATEGY_TRIGGER  = dt_time(12, 0)  # Weekly strategy trigger
 SETTLEMENT_AFTER  = dt_time(10, 0)  # Settlement after opening price
+WEEKLY_SUMMARY    = dt_time(17, 0)  # Weekly summary on last trading day
 
 API_URL    = "https://api.tase.co.il/api/derivatives/putvscall"
 EXPIRY_URL = "https://api.tase.co.il/api/derivatives/fltrputvscallexpdates"
@@ -347,6 +348,7 @@ def main():
     browser_born = time.monotonic()
     strategy_triggered_week = None   # track which week the strategy ran
     settled_today = None             # track which date we settled
+    weekly_summary_week = None       # track which week got summary
     consecutive_failures = 0         # crash detection counter
 
     with sync_playwright() as pw:
@@ -409,6 +411,21 @@ def main():
                         settled_today = today_iso
                     except Exception as se:
                         logger.error("Settlement error: %s", se, exc_info=True)
+
+                # Weekly summary: last trading day after 17:00
+                if (ok
+                        and now.time() >= WEEKLY_SUMMARY
+                        and is_last_cycle(now)
+                        and weekly_summary_week != current_week):
+                    try:
+                        logger.info("*** Sending weekly summary (week %d) ***",
+                                    current_week)
+                        stats = strategy_engine.get_weekly_stats(current_week)
+                        if stats and stats.get("trades", 0) > 0:
+                            telegram_bot.alert_weekly_summary(stats)
+                            weekly_summary_week = current_week
+                    except Exception as we:
+                        logger.error("Weekly summary error: %s", we, exc_info=True)
 
                 if ok and is_last_cycle(now):
                     logger.info("*** Last cycle of the day — saving to history ***")

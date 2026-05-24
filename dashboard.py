@@ -693,7 +693,7 @@ elif page == "ביצועים":
     dbd["cum"] = dbd["pnl"].cumsum()
     dbd["color"] = dbd["pnl"].apply(lambda x: C_GREEN if x >= 0 else C_RED)
 
-    tab1, tab2, tab3 = st.tabs(["P&L יומי", "P&L מצטבר", "Win Rate"])
+    tab1, tab2, tab3, tab4 = st.tabs(["P&L יומי", "P&L מצטבר", "Win Rate", "השוואת מרווחים"])
 
     with tab1:
         fig = go.Figure()
@@ -743,6 +743,39 @@ elif page == "ביצועים":
                 font=dict(size=28, color=C_GREEN, family="Inter"),
                 showarrow=False)],
         )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tab4:
+        # Cumulative P&L per interval over time
+        intervals = sorted(df_h["interval_pct"].unique())
+        fig = go.Figure()
+        palette = ["#00E676", "#00B0FF", "#FFD600", "#FF9100",
+                    "#E040FB", "#FF1744", "#76FF03", "#18FFFF"]
+        for i, pct in enumerate(intervals):
+            df_pct = df_h[df_h["interval_pct"] == pct].copy()
+            df_pct = df_pct.sort_values("trigger_date")
+            df_pct["cum_pnl"] = df_pct["actual_pnl_ils"].cumsum()
+            color = palette[i % len(palette)]
+            fig.add_trace(go.Scatter(
+                x=df_pct["trigger_date"], y=df_pct["cum_pnl"],
+                mode="lines+markers",
+                name=f"{pct}%",
+                line=dict(color=color, width=2),
+                marker=dict(size=4, color=color),
+                hovertemplate=(
+                    f"<b>מרווח {pct}%</b><br>"
+                    "%{x}<br>"
+                    "P&L מצטבר: ₪%{y:,.0f}<extra></extra>"
+                ),
+            ))
+        fig.update_layout(
+            showlegend=True,
+            legend=dict(
+                orientation="h", yanchor="bottom", y=-0.25,
+                font=dict(size=11, color=C_DIM)),
+            xaxis_title="", yaxis_title="P&L מצטבר (₪)",
+        )
+        plotly_layout(fig, h=400)
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("---")

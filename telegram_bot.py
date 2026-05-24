@@ -92,6 +92,45 @@ def alert_strategy_launch(num_strategies: int, expiry_dates: list):
     send_message(text)
 
 
+def alert_weekly_summary(week_stats: dict):
+    """Friday end-of-week summary report."""
+    total_pnl = week_stats.get("total_pnl", 0)
+    trades = week_stats.get("trades", 0)
+    wins = week_stats.get("wins", 0)
+    losses = trades - wins
+    wr = (wins / trades * 100) if trades > 0 else 0
+    best_interval = week_stats.get("best_interval", "—")
+    best_pnl = week_stats.get("best_pnl", 0)
+    worst_interval = week_stats.get("worst_interval", "—")
+    worst_pnl = week_stats.get("worst_pnl", 0)
+    cum_total = week_stats.get("cumulative_total", 0)
+
+    pnl_emoji = "📈" if total_pnl >= 0 else "📉"
+    wr_emoji = "🟢" if wr >= 50 else "🔴"
+
+    text = (
+        f"📊 *סיכום שבועי"
+        f" — TASE TA-35*\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"{pnl_emoji} *P&L שבועי:*"
+        f" `{total_pnl:+,.0f} ₪`\n"
+        f"{wr_emoji} *אחוז הצלחה:*"
+        f" `{wr:.0f}%`"
+        f" ({wins}W / {losses}L)\n"
+        f"📋 *עסקאות:* {trades}\n\n"
+        f"🏆 *מרווח הכי טוב:*"
+        f" {best_interval}%"
+        f" (`{best_pnl:+,.0f} ₪`)\n"
+        f"💀 *מרווח הכי גרוע:*"
+        f" {worst_interval}%"
+        f" (`{worst_pnl:+,.0f} ₪`)\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"💰 *P&L מצטבר כולל:*"
+        f" `{cum_total:+,.0f} ₪`"
+    )
+    send_message(text)
+
+
 def alert_settlement(day_name: str, settlement_index: float,
                      results: list):
     """Daily expiry settlement report."""

@@ -467,3 +467,79 @@ def settle_expiry(expiry_date_iso: str):
         telegram_bot.alert_settlement(day_name, index_close, report)
 
     return settled == len(strategies)
+
+
+# ------------------------------------------------------------------
+# Weekly stats for summary report
+# ------------------------------------------------------------------
+
+def get_weekly_stats(iso_week: int) -> dict:
+    """Gather stats for the given ISO week number for the weekly summary."""
+    _init()
+
+    # Read all settled strategies
+    url = (
+        f"{_base_url}/rest/v1/iron_condor_strategies"
+        f"?result_status=not.is.null"
+        f"&select=trigger_date,interval_pct,actual_pnl_ils,result_status"
+        f"&order=trigger_date"
+    )
+    try:
+        r = httpx.get(url, headers=_headers(), timeout=15)
+        if r.status_code not in (200, 206):
+            logger.warning("get_weekly_stats: HTTP %d", r.status_code)
+            return {}
+        rows = r.json()
+    except Exception as e:
+        logger.error("get_weekly_stats error: %s", e)
+        return {}
+
+    if not rows:
+        return {}
+
+    # Filter to current week
+    week_rows = []
+    all_rows = []
+    for row in rows:
+        pnl = _clean_numeric(row.get("actual_pnl_ils", 0))
+        all_rows.append(pnl)
+        try:
+            d = date.fromisoformat(row["trigger_date"])
+            if d.isocalendar()[1] == iso_week:
+                week_rows.append(row)
+        except (ValueError, KeyError):
+            continue
+
+    if not week_rows:
+        return {}
+
+    # Compute week stats
+    trades = len(week_rows)
+    wins = sum(1 for r in week_rows
+               if _clean_numeric(r.get("actual_pnl_ils", 0)) > 0)
+    total_pnl = sum(_clean_numeric(r.get("actual_pnl_ils", 0))
+                    for r in week_rows)
+
+    # Best and worst interval
+    by_interval = {}
+    for r in week_rows:
+        pct = _clean_numeric(r.get("interval_pct", 0))
+        pnl = _clean_numeric(r.get("actual_pnl_ils", 0))
+        by_interval[pct] = by_interval.get(pct, 0) + pnl
+
+    best_interval = max(by_interval, key=by_interval.get) if by_interval else 0
+    worst_interval = min(by_interval, key=by_interval.get) if by_interval else 0
+
+    # Cumulative total (all time)
+    cumulative_total = sum(all_rows)
+
+    return {
+        "trades": trades,
+        "wins": wins,
+        "total_pnl": total_pnl,
+        "best_interval": best_interval,
+        "best_pnl": by_interval.get(best_interval, 0),
+        "worst_interval": worst_interval,
+        "worst_pnl": by_interval.get(worst_interval, 0),
+        "cumulative_total": cumulative_total,
+    }
