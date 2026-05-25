@@ -704,37 +704,140 @@ elif page == "אסטרטגיות":
                 st.plotly_chart(fig, use_container_width=True,
                                 key=f"range_{exp_date}")
 
-        # ---------- Data table ----------
-        tbl = []
-        for _, r in df_e.iterrows():
-            res = r.get("result_status")
-            pnl = N(r.get("actual_pnl_ils", 0))
-            tbl.append({
-                "מרווח": f'{N(r.get("interval_pct", 0)) or 0}%',
-                "Long Put": fmt(r.get("long_put_strike")),
-                "Short Put": fmt(r.get("short_put_strike")),
-                "Short Call": fmt(r.get("short_call_strike")),
-                "Long Call": fmt(r.get("long_call_strike")),
-                "פרמיה": fmt(r.get("total_net_premium"), 2),
-                "רווח מקס ₪": fmt(r.get("max_profit_ils")),
-                "סיכון מקס ₪": fmt(r.get("max_risk_ils")),
-                "סטטוס": res if res else "פתוח",
-                "P&L ₪": f"{pnl:+,.0f}" if res and pnl is not None else "—",
-            })
-        st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True)
+        # ---------- Variation selector + detail card ----------
+        intervals = sorted(df_e["interval_pct"].unique())
+        int_labels = [f"{p:.1f}%" for p in intervals]
+        sel_int = st.select_slider(
+            "מרווח", options=int_labels,
+            value=int_labels[len(int_labels) // 2] if int_labels else None,
+            key=f"slider_{exp_date}")
+        sel_pct = intervals[int_labels.index(sel_int)]
+        sr = df_e[df_e["interval_pct"] == sel_pct].iloc[0]
 
-        # Position text
-        if idx > 0 and not df_e.empty:
-            mid = df_e.iloc[len(df_e) // 2]
-            sp_v = N(mid.get("short_put_strike", 0)) or 0
-            sc_v = N(mid.get("short_call_strike", 0)) or 0
-            if sp_v > 0 and sc_v > 0:
-                if sp_v <= idx <= sc_v:
-                    st.success(f"מדד {idx:,.2f} בטווח הרווח ({sp_v:.0f} – {sc_v:.0f})")
-                elif idx < sp_v:
-                    st.warning(f"מדד {idx:,.2f} מתחת ל-Short Put ({sp_v:.0f}) ב-{sp_v - idx:.0f} נק׳")
-                else:
-                    st.warning(f"מדד {idx:,.2f} מעל ל-Short Call ({sc_v:.0f}) ב-{idx - sc_v:.0f} נק׳")
+        lp_v  = N(sr.get("long_put_strike")) or 0
+        sp_v  = N(sr.get("short_put_strike")) or 0
+        sc_v  = N(sr.get("short_call_strike")) or 0
+        lc_v  = N(sr.get("long_call_strike")) or 0
+        bl_v  = N(sr.get("breakeven_lower")) or 0
+        bh_v  = N(sr.get("breakeven_upper")) or 0
+        prem  = N(sr.get("total_net_premium")) or 0
+        mp_v  = N(sr.get("max_profit_ils")) or 0
+        mr_v  = N(sr.get("max_risk_ils")) or 0
+        rr_v  = N(sr.get("risk_reward_ratio")) or 0
+        dte_v = N(sr.get("days_to_expiry")) or 0
+        res   = sr.get("result_status")
+        pnl_v = N(sr.get("actual_pnl_ils"))
+
+        # Position status
+        if idx > 0 and sp_v > 0 and sc_v > 0:
+            if sp_v <= idx <= sc_v:
+                pos_html = (f'<span style="color:{C_GREEN}">✅ מדד בטווח הרווח'
+                            f' ({sp_v:,.0f} – {sc_v:,.0f})</span>')
+            elif idx < sp_v:
+                pos_html = (f'<span style="color:{C_RED}">⚠️ מתחת ל-Short Put'
+                            f' ב-{sp_v - idx:,.0f} נק׳</span>')
+            else:
+                pos_html = (f'<span style="color:{C_RED}">⚠️ מעל ל-Short Call'
+                            f' ב-{idx - sc_v:,.0f} נק׳</span>')
+        else:
+            pos_html = ""
+
+        status_badge = ""
+        if res:
+            pnl_color = C_GREEN if pnl_v and pnl_v >= 0 else C_RED
+            pnl_sign = "+" if pnl_v and pnl_v >= 0 else ""
+            status_badge = (
+                f'<div style="text-align:center;margin-top:8px;">'
+                f'<span style="font-size:18px;font-weight:700;'
+                f'color:{pnl_color}">'
+                f'{pnl_sign}{pnl_v:,.0f} ₪</span>'
+                f'<div style="font-size:10px;color:{C_DIM};'
+                f'margin-top:2px">{res}</div></div>')
+
+        st.markdown(f"""
+        <div style="background:{C_CARD};border:1px solid {C_BORDER};
+                    border-radius:10px;padding:16px 20px;
+                    margin:8px 0 4px;">
+            <div style="display:flex;justify-content:space-between;
+                        align-items:center;margin-bottom:10px;">
+                <span style="font-size:15px;font-weight:700;
+                             color:{C_TEXT}">
+                    מרווח {sel_int}</span>
+                <span style="font-size:11px;color:{C_DIM}">
+                    {int(dte_v)} ימים לפקיעה</span>
+            </div>
+            <div style="display:grid;
+                        grid-template-columns:repeat(4,1fr);
+                        gap:10px;direction:ltr;">
+                <div style="text-align:center">
+                    <div style="font-size:9px;color:{C_DIM};
+                                text-transform:uppercase;
+                                letter-spacing:0.5px">Long Put</div>
+                    <div style="font-size:14px;font-weight:600;
+                                color:{C_RED}">{lp_v:,.0f}</div>
+                </div>
+                <div style="text-align:center">
+                    <div style="font-size:9px;color:{C_DIM};
+                                text-transform:uppercase;
+                                letter-spacing:0.5px">Short Put</div>
+                    <div style="font-size:14px;font-weight:600;
+                                color:{C_GREEN}">{sp_v:,.0f}</div>
+                </div>
+                <div style="text-align:center">
+                    <div style="font-size:9px;color:{C_DIM};
+                                text-transform:uppercase;
+                                letter-spacing:0.5px">Short Call</div>
+                    <div style="font-size:14px;font-weight:600;
+                                color:{C_GREEN}">{sc_v:,.0f}</div>
+                </div>
+                <div style="text-align:center">
+                    <div style="font-size:9px;color:{C_DIM};
+                                text-transform:uppercase;
+                                letter-spacing:0.5px">Long Call</div>
+                    <div style="font-size:14px;font-weight:600;
+                                color:{C_RED}">{lc_v:,.0f}</div>
+                </div>
+            </div>
+            <div style="border-top:1px solid {C_BORDER};
+                        margin:10px 0;padding-top:10px;
+                        display:grid;
+                        grid-template-columns:repeat(4,1fr);
+                        gap:8px;text-align:center;">
+                <div>
+                    <div style="font-size:9px;color:{C_DIM}">פרמיה</div>
+                    <div style="font-size:13px;font-weight:600;
+                                color:{C_TEXT}">{prem:,.2f}</div>
+                </div>
+                <div>
+                    <div style="font-size:9px;color:{C_DIM}">רווח מקס</div>
+                    <div style="font-size:13px;font-weight:600;
+                                color:{C_GREEN}">+{mp_v:,.0f} ₪</div>
+                </div>
+                <div>
+                    <div style="font-size:9px;color:{C_DIM}">סיכון מקס</div>
+                    <div style="font-size:13px;font-weight:600;
+                                color:{C_RED}">-{mr_v:,.0f} ₪</div>
+                </div>
+                <div>
+                    <div style="font-size:9px;color:{C_DIM}">Risk/Reward</div>
+                    <div style="font-size:13px;font-weight:600;
+                                color:{C_TEXT}">{rr_v:.1f}x</div>
+                </div>
+            </div>
+            <div style="border-top:1px solid {C_BORDER};
+                        margin-top:8px;padding-top:8px;
+                        display:flex;justify-content:space-between;
+                        font-size:11px;">
+                <span style="color:{C_DIM}">BE תחתון:
+                    <b style="color:{C_TEXT}">{bl_v:,.0f}</b></span>
+                <span style="color:{C_DIM}">BE עליון:
+                    <b style="color:{C_TEXT}">{bh_v:,.0f}</b></span>
+            </div>
+            {"<div style='margin-top:6px;text-align:center;font-size:12px'>"
+             + pos_html + "</div>" if pos_html else ""}
+            {status_badge}
+        </div>
+        """, unsafe_allow_html=True)
 
         st.markdown("---")
 
