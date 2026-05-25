@@ -556,288 +556,149 @@ elif page == "אסטרטגיות":
             f'<span class="day">יום {dn} — {exp_date}</span>{badge}</div>',
             unsafe_allow_html=True)
 
-        # ---------- Break-Even Range Chart ----------
+        # ---------- Variation selector ----------
         if not df_e.empty:
-            rows_data = []
-            for _, r in df_e.iterrows():
-                lp  = N(r.get("long_put_strike")) or 0
-                sp  = N(r.get("short_put_strike")) or 0
-                sc  = N(r.get("short_call_strike")) or 0
-                lc  = N(r.get("long_call_strike")) or 0
-                bl  = N(r.get("breakeven_lower")) or 0
-                bh  = N(r.get("breakeven_upper")) or 0
-                pct = N(r.get("interval_pct")) or 0
-                mp  = N(r.get("max_profit_ils")) or 0
-                mr  = N(r.get("max_risk_ils")) or 0
-                if lp == 0 or lc == 0:
-                    continue
-                rows_data.append(dict(
-                    pct=pct, lp=lp, sp=sp, sc=sc, lc=lc,
-                    bl=bl, bh=bh, mp=mp, mr=mr))
+            intervals = sorted(df_e["interval_pct"].unique())
+            int_labels = [f"{p:.1f}%" for p in intervals]
+            sel_int = st.select_slider(
+                "בחר מרווח", options=int_labels,
+                value=int_labels[len(int_labels) // 2],
+                key=f"slider_{exp_date}")
+            sel_pct = intervals[int_labels.index(sel_int)]
+            sr = df_e[df_e["interval_pct"] == sel_pct].iloc[0]
 
-            if rows_data:
-                # Sort widest at top (reversed for plotly y-axis)
-                rows_data.sort(key=lambda d: d["pct"])
-                labels = [f"{d['pct']:.1f}%" for d in rows_data]
-                x_lo = min(d["lp"] for d in rows_data) - 20
-                x_hi = max(d["lc"] for d in rows_data) + 20
+            lp_v = N(sr.get("long_put_strike")) or 0
+            sp_v = N(sr.get("short_put_strike")) or 0
+            sc_v = N(sr.get("short_call_strike")) or 0
+            lc_v = N(sr.get("long_call_strike")) or 0
+            bl_v = N(sr.get("breakeven_lower")) or 0
+            bh_v = N(sr.get("breakeven_upper")) or 0
+            mp_v = N(sr.get("max_profit_ils")) or 0
+            mr_v = N(sr.get("max_risk_ils")) or 0
+            prem = N(sr.get("total_net_premium")) or 0
+            rr_v = N(sr.get("risk_reward_ratio")) or 0
+            res  = sr.get("result_status")
+            pnl_v = N(sr.get("actual_pnl_ils"))
 
+            # ---- KPI row ----
+            st.markdown(f"""
+            <div class="kpi-grid">
+                <div class="kpi accent-green">
+                    <div class="label">רווח מקס</div>
+                    <div class="val green">+{mp_v:,.0f} ₪</div>
+                </div>
+                <div class="kpi accent-red">
+                    <div class="label">סיכון מקס</div>
+                    <div class="val red">-{mr_v:,.0f} ₪</div>
+                </div>
+                <div class="kpi accent-blue">
+                    <div class="label">פרמיה נטו</div>
+                    <div class="val blue">{prem:,.2f}</div>
+                </div>
+                <div class="kpi accent-dim">
+                    <div class="label">Risk / Reward</div>
+                    <div class="val">{rr_v:.1f}x</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # ---- Visual strike range ----
+            if lp_v > 0 and lc_v > 0:
+                pad = 25
+                x0, x1 = lp_v - pad, lc_v + pad
                 fig = go.Figure()
 
-                for i, d in enumerate(rows_data):
-                    y = labels[i]
+                # Risk left
+                fig.add_shape(type="rect",
+                    x0=lp_v, x1=bl_v, y0=0.15, y1=0.85,
+                    fillcolor="rgba(255,23,68,0.10)",
+                    line=dict(width=0))
+                # Profit zone
+                fig.add_shape(type="rect",
+                    x0=bl_v, x1=bh_v, y0=0.15, y1=0.85,
+                    fillcolor="rgba(0,230,118,0.15)",
+                    line=dict(width=0))
+                # Risk right
+                fig.add_shape(type="rect",
+                    x0=bh_v, x1=lc_v, y0=0.15, y1=0.85,
+                    fillcolor="rgba(255,23,68,0.10)",
+                    line=dict(width=0))
 
-                    # Risk zone left (Long Put → BE lower)
-                    fig.add_trace(go.Bar(
-                        x=[d["bl"] - d["lp"]], y=[y],
-                        base=d["lp"], orientation="h",
-                        marker=dict(color="rgba(255,23,68,0.15)",
-                                    line=dict(width=0)),
-                        width=0.5, showlegend=False,
-                        hovertemplate=(
-                            f"<b>{y}</b> הפסד<br>"
-                            f"Long Put: {d['lp']:,.0f}<br>"
-                            f"BE: {d['bl']:,.0f}<br>"
-                            f"סיכון: -{d['mr']:,.0f} ₪"
-                            "<extra></extra>"),
-                    ))
-
-                    # Profit zone (BE lower → BE upper)
-                    fig.add_trace(go.Bar(
-                        x=[d["bh"] - d["bl"]], y=[y],
-                        base=d["bl"], orientation="h",
-                        marker=dict(color="rgba(0,230,118,0.25)",
-                                    line=dict(width=0)),
-                        width=0.5, showlegend=False,
-                        hovertemplate=(
-                            f"<b>{y}</b> רווח<br>"
-                            f"BE: {d['bl']:,.0f} — {d['bh']:,.0f}<br>"
-                            f"Short Put: {d['sp']:,.0f} | "
-                            f"Short Call: {d['sc']:,.0f}<br>"
-                            f"רווח מקס: +{d['mp']:,.0f} ₪"
-                            "<extra></extra>"),
-                    ))
-
-                    # Risk zone right (BE upper → Long Call)
-                    fig.add_trace(go.Bar(
-                        x=[d["lc"] - d["bh"]], y=[y],
-                        base=d["bh"], orientation="h",
-                        marker=dict(color="rgba(255,23,68,0.15)",
-                                    line=dict(width=0)),
-                        width=0.5, showlegend=False,
-                        hovertemplate=(
-                            f"<b>{y}</b> הפסד<br>"
-                            f"BE: {d['bh']:,.0f}<br>"
-                            f"Long Call: {d['lc']:,.0f}<br>"
-                            f"סיכון: -{d['mr']:,.0f} ₪"
-                            "<extra></extra>"),
-                    ))
-
-                    # Short strikes — inner ticks
+                # Strike markers
+                for val, lbl, clr in [
+                    (lp_v, "LP", C_RED), (sp_v, "SP", C_GREEN),
+                    (sc_v, "SC", C_GREEN), (lc_v, "LC", C_RED),
+                ]:
                     fig.add_trace(go.Scatter(
-                        x=[d["sp"], d["sc"]], y=[y, y],
-                        mode="markers",
-                        marker=dict(symbol="line-ns", size=8,
-                                    line=dict(width=1.5,
-                                              color="rgba(0,230,118,0.6)")),
+                        x=[val], y=[0.5], mode="markers+text",
+                        marker=dict(size=9, color=clr,
+                                    symbol="diamond"),
+                        text=[f"{lbl} {val:,.0f}"],
+                        textposition="top center",
+                        textfont=dict(size=9, color=clr),
                         showlegend=False,
-                        hovertemplate=(
-                            f"Short: %{{x:,.0f}}<extra></extra>"),
-                    ))
+                        hoverinfo="skip"))
 
-                    # Profit annotation on the right
-                    fig.add_annotation(
-                        x=d["lc"] + 3, y=y,
-                        text=f"+{d['mp']:,.0f}₪",
-                        showarrow=False, xanchor="left",
-                        font=dict(size=9, color=C_GREEN),
-                    )
+                # BE markers
+                for val in [bl_v, bh_v]:
+                    fig.add_trace(go.Scatter(
+                        x=[val], y=[0.5], mode="markers+text",
+                        marker=dict(size=6, color=C_TEXT,
+                                    symbol="triangle-up"),
+                        text=[f"BE {val:,.0f}"],
+                        textposition="bottom center",
+                        textfont=dict(size=8, color=C_DIM),
+                        showlegend=False,
+                        hoverinfo="skip"))
 
-                # Current index line
+                # Current index
                 if idx > 0:
-                    fig.add_vline(
-                        x=idx, line_width=1.5, line_dash="dot",
-                        line_color=C_BLUE,
-                        annotation_text=f"TA-35: {idx:,.0f}",
-                        annotation_position="top",
-                        annotation_font=dict(size=9, color=C_BLUE),
-                    )
+                    fig.add_trace(go.Scatter(
+                        x=[idx, idx], y=[0, 1], mode="lines",
+                        line=dict(color=C_BLUE, width=2, dash="dot"),
+                        showlegend=False, hoverinfo="skip"))
+                    fig.add_annotation(
+                        x=idx, y=1.05, text=f"TA-35: {idx:,.0f}",
+                        showarrow=False,
+                        font=dict(size=9, color=C_BLUE))
 
-                # Settlement line
-                if has_res and "actual_index_close" in df_e.columns:
-                    cv = N(df_e["actual_index_close"].iloc[0])
-                    if cv and cv > 0:
-                        fig.add_vline(
-                            x=cv, line_width=1.5,
-                            line_color=C_RED,
-                            annotation_text=f"פקיעה: {cv:,.0f}",
-                            annotation_position="top right",
-                            annotation_font=dict(size=9, color=C_RED),
-                        )
-
-                n_rows = len(rows_data)
                 fig.update_layout(
-                    barmode="stack",
-                    xaxis=dict(
-                        range=[x_lo, x_hi + 60],
-                        showgrid=False, showline=False,
-                        zeroline=False,
-                        tickfont=dict(size=9, color=C_DIM),
-                    ),
-                    yaxis=dict(
-                        showgrid=False, showline=False,
-                        tickfont=dict(size=10, color=C_TEXT,
-                                      family="Inter"),
-                        autorange="reversed",
-                    ),
-                    height=max(120, 28 * n_rows + 50),
-                    margin=dict(l=4, r=4, t=20, b=4),
-                    plot_bgcolor=C_CARD,
-                    paper_bgcolor=C_CARD,
-                    font=dict(family="Inter", color=C_TEXT, size=9),
-                    hoverlabel=dict(
-                        bgcolor=C_CARD, bordercolor=C_BORDER,
-                        font=dict(color=C_TEXT, size=10),
-                    ),
-                    hovermode="closest",
+                    xaxis=dict(range=[x0, x1], showgrid=False,
+                               showline=False, zeroline=False,
+                               tickfont=dict(size=9, color=C_DIM)),
+                    yaxis=dict(visible=False, range=[-0.1, 1.2]),
+                    height=110,
+                    margin=dict(l=0, r=0, t=16, b=20),
+                    plot_bgcolor=C_CARD, paper_bgcolor=C_CARD,
                 )
                 st.plotly_chart(fig, use_container_width=True,
-                                key=f"range_{exp_date}")
+                                key=f"strip_{exp_date}")
 
-        # ---------- Variation selector + detail card ----------
-        intervals = sorted(df_e["interval_pct"].unique())
-        int_labels = [f"{p:.1f}%" for p in intervals]
-        sel_int = st.select_slider(
-            "מרווח", options=int_labels,
-            value=int_labels[len(int_labels) // 2] if int_labels else None,
-            key=f"slider_{exp_date}")
-        sel_pct = intervals[int_labels.index(sel_int)]
-        sr = df_e[df_e["interval_pct"] == sel_pct].iloc[0]
+            # ---- Position status ----
+            if idx > 0 and sp_v > 0 and sc_v > 0:
+                if sp_v <= idx <= sc_v:
+                    st.success(
+                        f"✅ מדד {idx:,.0f} בטווח הרווח"
+                        f" ({sp_v:,.0f} – {sc_v:,.0f})")
+                elif idx < sp_v:
+                    st.warning(
+                        f"⚠️ מדד {idx:,.0f} מתחת ל-Short Put"
+                        f" ב-{sp_v - idx:,.0f} נק׳")
+                else:
+                    st.warning(
+                        f"⚠️ מדד {idx:,.0f} מעל ל-Short Call"
+                        f" ב-{idx - sc_v:,.0f} נק׳")
 
-        lp_v  = N(sr.get("long_put_strike")) or 0
-        sp_v  = N(sr.get("short_put_strike")) or 0
-        sc_v  = N(sr.get("short_call_strike")) or 0
-        lc_v  = N(sr.get("long_call_strike")) or 0
-        bl_v  = N(sr.get("breakeven_lower")) or 0
-        bh_v  = N(sr.get("breakeven_upper")) or 0
-        prem  = N(sr.get("total_net_premium")) or 0
-        mp_v  = N(sr.get("max_profit_ils")) or 0
-        mr_v  = N(sr.get("max_risk_ils")) or 0
-        rr_v  = N(sr.get("risk_reward_ratio")) or 0
-        dte_v = N(sr.get("days_to_expiry")) or 0
-        res   = sr.get("result_status")
-        pnl_v = N(sr.get("actual_pnl_ils"))
-
-        # Position status
-        if idx > 0 and sp_v > 0 and sc_v > 0:
-            if sp_v <= idx <= sc_v:
-                pos_html = (f'<span style="color:{C_GREEN}">✅ מדד בטווח הרווח'
-                            f' ({sp_v:,.0f} – {sc_v:,.0f})</span>')
-            elif idx < sp_v:
-                pos_html = (f'<span style="color:{C_RED}">⚠️ מתחת ל-Short Put'
-                            f' ב-{sp_v - idx:,.0f} נק׳</span>')
-            else:
-                pos_html = (f'<span style="color:{C_RED}">⚠️ מעל ל-Short Call'
-                            f' ב-{idx - sc_v:,.0f} נק׳</span>')
-        else:
-            pos_html = ""
-
-        status_badge = ""
-        if res:
-            pnl_color = C_GREEN if pnl_v and pnl_v >= 0 else C_RED
-            pnl_sign = "+" if pnl_v and pnl_v >= 0 else ""
-            status_badge = (
-                f'<div style="text-align:center;margin-top:8px;">'
-                f'<span style="font-size:18px;font-weight:700;'
-                f'color:{pnl_color}">'
-                f'{pnl_sign}{pnl_v:,.0f} ₪</span>'
-                f'<div style="font-size:10px;color:{C_DIM};'
-                f'margin-top:2px">{res}</div></div>')
-
-        st.markdown(f"""
-        <div style="background:{C_CARD};border:1px solid {C_BORDER};
-                    border-radius:10px;padding:16px 20px;
-                    margin:8px 0 4px;">
-            <div style="display:flex;justify-content:space-between;
-                        align-items:center;margin-bottom:10px;">
-                <span style="font-size:15px;font-weight:700;
-                             color:{C_TEXT}">
-                    מרווח {sel_int}</span>
-                <span style="font-size:11px;color:{C_DIM}">
-                    {int(dte_v)} ימים לפקיעה</span>
-            </div>
-            <div style="display:grid;
-                        grid-template-columns:repeat(4,1fr);
-                        gap:10px;direction:ltr;">
-                <div style="text-align:center">
-                    <div style="font-size:9px;color:{C_DIM};
-                                text-transform:uppercase;
-                                letter-spacing:0.5px">Long Put</div>
-                    <div style="font-size:14px;font-weight:600;
-                                color:{C_RED}">{lp_v:,.0f}</div>
-                </div>
-                <div style="text-align:center">
-                    <div style="font-size:9px;color:{C_DIM};
-                                text-transform:uppercase;
-                                letter-spacing:0.5px">Short Put</div>
-                    <div style="font-size:14px;font-weight:600;
-                                color:{C_GREEN}">{sp_v:,.0f}</div>
-                </div>
-                <div style="text-align:center">
-                    <div style="font-size:9px;color:{C_DIM};
-                                text-transform:uppercase;
-                                letter-spacing:0.5px">Short Call</div>
-                    <div style="font-size:14px;font-weight:600;
-                                color:{C_GREEN}">{sc_v:,.0f}</div>
-                </div>
-                <div style="text-align:center">
-                    <div style="font-size:9px;color:{C_DIM};
-                                text-transform:uppercase;
-                                letter-spacing:0.5px">Long Call</div>
-                    <div style="font-size:14px;font-weight:600;
-                                color:{C_RED}">{lc_v:,.0f}</div>
-                </div>
-            </div>
-            <div style="border-top:1px solid {C_BORDER};
-                        margin:10px 0;padding-top:10px;
-                        display:grid;
-                        grid-template-columns:repeat(4,1fr);
-                        gap:8px;text-align:center;">
-                <div>
-                    <div style="font-size:9px;color:{C_DIM}">פרמיה</div>
-                    <div style="font-size:13px;font-weight:600;
-                                color:{C_TEXT}">{prem:,.2f}</div>
-                </div>
-                <div>
-                    <div style="font-size:9px;color:{C_DIM}">רווח מקס</div>
-                    <div style="font-size:13px;font-weight:600;
-                                color:{C_GREEN}">+{mp_v:,.0f} ₪</div>
-                </div>
-                <div>
-                    <div style="font-size:9px;color:{C_DIM}">סיכון מקס</div>
-                    <div style="font-size:13px;font-weight:600;
-                                color:{C_RED}">-{mr_v:,.0f} ₪</div>
-                </div>
-                <div>
-                    <div style="font-size:9px;color:{C_DIM}">Risk/Reward</div>
-                    <div style="font-size:13px;font-weight:600;
-                                color:{C_TEXT}">{rr_v:.1f}x</div>
-                </div>
-            </div>
-            <div style="border-top:1px solid {C_BORDER};
-                        margin-top:8px;padding-top:8px;
-                        display:flex;justify-content:space-between;
-                        font-size:11px;">
-                <span style="color:{C_DIM}">BE תחתון:
-                    <b style="color:{C_TEXT}">{bl_v:,.0f}</b></span>
-                <span style="color:{C_DIM}">BE עליון:
-                    <b style="color:{C_TEXT}">{bh_v:,.0f}</b></span>
-            </div>
-            {"<div style='margin-top:6px;text-align:center;font-size:12px'>"
-             + pos_html + "</div>" if pos_html else ""}
-            {status_badge}
-        </div>
-        """, unsafe_allow_html=True)
+            # ---- Result badge (if settled) ----
+            if res and pnl_v is not None:
+                pnl_c = C_GREEN if pnl_v >= 0 else C_RED
+                st.markdown(
+                    f'<div style="text-align:center;padding:8px 0">'
+                    f'<span style="font-size:20px;font-weight:700;'
+                    f'color:{pnl_c}">'
+                    f'{"+" if pnl_v >= 0 else ""}{pnl_v:,.0f} ₪'
+                    f'</span></div>',
+                    unsafe_allow_html=True)
 
         st.markdown("---")
 
