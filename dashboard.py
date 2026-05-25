@@ -301,7 +301,31 @@ def fmt(val, dec=0):
     return f"{v:,.{dec}f}"
 
 
+@st.cache_data(ttl=60)
+def _fetch_ta35_yahoo() -> float:
+    """Fetch TA-35 index from Yahoo Finance."""
+    try:
+        url = ("https://query1.finance.yahoo.com/v8/finance/chart/TA35.TA"
+               "?interval=1d&range=1d")
+        r = httpx.get(url, timeout=10,
+                      headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code == 200:
+            meta = (r.json().get("chart", {})
+                    .get("result", [{}])[0].get("meta", {}))
+            price = meta.get("regularMarketPrice", 0)
+            if price and price > 0:
+                return float(price)
+    except Exception:
+        pass
+    return 0.0
+
+
 def get_idx(df):
+    # 1. Yahoo Finance (real-time)
+    yf = _fetch_ta35_yahoo()
+    if yf > 0:
+        return yf
+    # 2. Fallback: underlingasset from DB
     for c in ["underlingasset_call", "underlingasset_put"]:
         if c in df.columns:
             for v in df[c]:
