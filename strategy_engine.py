@@ -77,29 +77,56 @@ def _read_live_data() -> list:
     return []
 
 
+def _fetch_index_from_yahoo() -> float:
+    """Fetch TA-35 live index value from Yahoo Finance API."""
+    url = ("https://query1.finance.yahoo.com/v8/finance/chart/TA35.TA"
+           "?interval=1d&range=1d")
+    try:
+        r = httpx.get(url, timeout=10, headers={
+            "User-Agent": "Mozilla/5.0",
+        })
+        if r.status_code == 200:
+            data = r.json()
+            meta = (data.get("chart", {})
+                        .get("result", [{}])[0]
+                        .get("meta", {}))
+            price = meta.get("regularMarketPrice", 0)
+            if price and price > 0:
+                logger.info("TA-35 index from Yahoo Finance: %.2f", price)
+                return float(price)
+    except Exception as e:
+        logger.warning("Yahoo Finance fetch failed: %s", e)
+    return 0.0
+
+
 def _get_base_index(rows: list) -> float:
     """
-    Extract the TA-35 base index value from the data.
+    Get the TA-35 base index value.
 
-    Strategy:
-    1. Try explicit underlingasset_call/put field (populated from API
-       top-level response).
-    2. Fallback: infer from ATM strikes — find the option with
-       delta closest to 50 (ATM) and use its strike price.
+    Priority:
+    1. Yahoo Finance API (real-time, most reliable)
+    2. underlingasset_call/put from Supabase data
+    3. ATM delta inference (delta closest to 50)
+    4. Strike range midpoint (last resort)
     """
-    # Method 1: explicit field
-    for row in rows:
-        val = _clean_numeric(row.get("underlingasset_call"))
-        if val > 0:
-            logger.info("Base index from underlingasset_call: %.2f", val)
-            return val
-        val = _clean_numeric(row.get("underlingasset_put"))
-        if val > 0:
-            logger.info("Base index from underlingasset_put: %.2f", val)
-            return val
+    # Method 1: Yahoo Finance API (primary source)
+    val = _fetch_index_from_yahoo()
+    if val > 0:
+        return val
 
-    # Method 2: infer from ATM call (delta closest to 50)
-    logger.info("underlingasset empty — inferring from ATM delta")
+    # Method 2: explicit field from TASE API
+    for row in rows:
+        v = _clean_numeric(row.get("underlingasset_call"))
+        if v > 0:
+            logger.info("Base index from underlingasset_call: %.2f", v)
+            return v
+        v = _clean_numeric(row.get("underlingasset_put"))
+        if v > 0:
+            logger.info("Base index from underlingasset_put: %.2f", v)
+            return v
+
+    # Method 3: infer from ATM call (delta closest to 50)
+    logger.info("Falling back to ATM delta inference")
     best_strike = 0.0
     best_diff = float("inf")
     for row in rows:
@@ -112,16 +139,14 @@ def _get_base_index(rows: list) -> float:
                 best_strike = strike
 
     if best_strike > 0:
-        logger.info("Base index inferred from ATM call delta: %.2f "
-                    "(delta diff=%.1f)", best_strike, best_diff)
+        logger.info("Base index from ATM delta: %.2f (diff=%.1f)",
+                    best_strike, best_diff)
         return best_strike
 
-    # Method 3: midpoint of strike range
-    strikes = []
-    for row in rows:
-        s = _clean_numeric(row.get("expirationprice_call"))
-        if s > 100:  # filter out noise (strike=1.0 etc.)
-            strikes.append(s)
+    # Method 4: midpoint of strike range
+    strikes = [_clean_numeric(row.get("expirationprice_call"))
+               for row in rows]
+    strikes = [s for s in strikes if s > 100]
     if strikes:
         midpoint = (min(strikes) + max(strikes)) / 2.0
         logger.warning("Base index from strike midpoint (last resort): %.2f",
