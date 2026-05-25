@@ -78,14 +78,56 @@ def _read_live_data() -> list:
 
 
 def _get_base_index(rows: list) -> float:
-    """Extract the TA-35 base index value from the data."""
+    """
+    Extract the TA-35 base index value from the data.
+
+    Strategy:
+    1. Try explicit underlingasset_call/put field (populated from API
+       top-level response).
+    2. Fallback: infer from ATM strikes — find the option with
+       delta closest to 50 (ATM) and use its strike price.
+    """
+    # Method 1: explicit field
     for row in rows:
         val = _clean_numeric(row.get("underlingasset_call"))
         if val > 0:
+            logger.info("Base index from underlingasset_call: %.2f", val)
             return val
         val = _clean_numeric(row.get("underlingasset_put"))
         if val > 0:
+            logger.info("Base index from underlingasset_put: %.2f", val)
             return val
+
+    # Method 2: infer from ATM call (delta closest to 50)
+    logger.info("underlingasset empty — inferring from ATM delta")
+    best_strike = 0.0
+    best_diff = float("inf")
+    for row in rows:
+        delta = _clean_numeric(row.get("delta_call"))
+        strike = _clean_numeric(row.get("expirationprice_call"))
+        if strike > 0 and 0 < delta < 100:
+            diff = abs(delta - 50.0)
+            if diff < best_diff:
+                best_diff = diff
+                best_strike = strike
+
+    if best_strike > 0:
+        logger.info("Base index inferred from ATM call delta: %.2f "
+                    "(delta diff=%.1f)", best_strike, best_diff)
+        return best_strike
+
+    # Method 3: midpoint of strike range
+    strikes = []
+    for row in rows:
+        s = _clean_numeric(row.get("expirationprice_call"))
+        if s > 100:  # filter out noise (strike=1.0 etc.)
+            strikes.append(s)
+    if strikes:
+        midpoint = (min(strikes) + max(strikes)) / 2.0
+        logger.warning("Base index from strike midpoint (last resort): %.2f",
+                       midpoint)
+        return midpoint
+
     return 0.0
 
 

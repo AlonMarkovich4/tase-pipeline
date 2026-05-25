@@ -229,6 +229,7 @@ def _fetch_all_pages(page, expr_date_iso: str):
     page_num = 1
     trade_date = None
     asset_name = None
+    underlying_value = None
 
     while True:
         js = """
@@ -286,6 +287,29 @@ def _fetch_all_pages(page, expr_date_iso: str):
         trade_date = trade_date or data.get("TradeDate")
         asset_name = asset_name or data.get("AssetName")
 
+        # Capture underlying asset value from top-level response
+        if underlying_value is None:
+            # Log all top-level keys on first page for debugging
+            if page_num == 1:
+                top_keys = [k for k in data.keys() if k != "Items"]
+                logger.info("   API top-level keys: %s", top_keys)
+                # Log values of non-Items keys (for finding base index)
+                for k in top_keys:
+                    v = data[k]
+                    if isinstance(v, (int, float)) and v > 0:
+                        logger.info("   API %s = %s", k, v)
+
+            # Try common field names for underlying asset value
+            for field in ("UnderlyingAssetValue", "UnderlyingAsset",
+                          "UnderlingAsset", "BaseValue", "IndexValue",
+                          "AssetValue", "BaseRate"):
+                val = data.get(field)
+                if val and isinstance(val, (int, float)) and val > 0:
+                    underlying_value = float(val)
+                    logger.info("   Underlying asset from '%s': %.2f",
+                                field, underlying_value)
+                    break
+
         if not items:
             break
 
@@ -298,7 +322,7 @@ def _fetch_all_pages(page, expr_date_iso: str):
         page_num += 1
         time.sleep(0.5)
 
-    return all_items, trade_date, asset_name
+    return all_items, trade_date, asset_name, underlying_value
 
 
 # ------------------------------------------------------------------
@@ -329,7 +353,18 @@ def run_cycle(page, cycle_time: datetime):
 
         logger.info(">> %s (%s) %s", en, he, exp_iso)
 
-        items, trade_dt, asset = _fetch_all_pages(page, exp_iso)
+        items, trade_dt, asset, underlying = _fetch_all_pages(
+            page, exp_iso,
+        )
+
+        # Inject underlying asset value into each item so it's
+        # stored in Supabase and available for strategy_engine
+        if underlying and items:
+            for item in items:
+                if not item.get("UnderlingAsset_Call"):
+                    item["UnderlingAsset_Call"] = underlying
+                if not item.get("UnderlingAsset_Put"):
+                    item["UnderlingAsset_Put"] = underlying
 
         if items:
             if db.upsert_items(date_str, time_str, exp_iso,
