@@ -33,7 +33,8 @@ FETCH_INTERVAL  = int(os.environ.get("FETCH_INTERVAL_MINUTES", "15")) * 60
 PAGE_TIMEOUT    = 45_000
 RENDER_WAIT     = 6
 BROWSER_RESTART = 6 * 3600  # restart browser every 6h
-STRATEGY_TRIGGER  = dt_time(12, 0)  # Weekly strategy trigger
+STRATEGY_WINDOW_OPEN  = dt_time(12, 0)  # Strategy trigger window start
+STRATEGY_WINDOW_CLOSE = dt_time(13, 0)  # Strategy trigger window end
 SETTLEMENT_AFTER  = dt_time(10, 0)  # Settlement after opening price
 WEEKLY_SUMMARY    = dt_time(17, 0)  # Weekly summary on last trading day
 
@@ -407,18 +408,27 @@ def main():
             try:
                 ok = run_cycle(page, now)
 
-                # Weekly strategy trigger: first day with data after 12:00
+                # Weekly strategy trigger: first cycle with data
+                # inside the 12:00-13:00 window
                 if (ok
-                        and now.time() >= STRATEGY_TRIGGER
+                        and STRATEGY_WINDOW_OPEN <= now.time() <= STRATEGY_WINDOW_CLOSE
                         and strategy_triggered_week != current_week):
                     en, _ = DAY_NAMES.get(now.weekday(), ("?", "?"))
-                    logger.info("*** %s 12:00 — triggering Iron Condor strategy (week %d) ***",
-                                en, current_week)
+                    logger.info("*** %s %s — triggering Iron Condor strategy (week %d) ***",
+                                en, now.strftime("%H:%M"), current_week)
                     try:
-                        strategy_engine.run_strategy()
-                        strategy_triggered_week = current_week
+                        result = strategy_engine.run_strategy()
+                        if result:
+                            strategy_triggered_week = current_week
+                            logger.info("Strategy triggered successfully — "
+                                        "won't retry this week")
+                        else:
+                            logger.warning("Strategy returned False — "
+                                           "will retry next cycle in window")
                     except Exception as se:
-                        logger.error("Strategy engine error: %s", se, exc_info=True)
+                        logger.error("Strategy engine error: %s — "
+                                     "will retry next cycle in window",
+                                     se, exc_info=True)
 
                 # Settlement: expiry day after 10:00 (opening price set)
                 today_iso = now.strftime("%Y-%m-%d")
