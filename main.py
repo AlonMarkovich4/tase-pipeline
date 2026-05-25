@@ -88,6 +88,44 @@ signal.signal(signal.SIGINT,  _on_signal)
 signal.signal(signal.SIGTERM, _on_signal)
 
 # ------------------------------------------------------------------
+# Health-check HTTP endpoint (Render pings PORT to verify liveness)
+# ------------------------------------------------------------------
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+_health_state: dict = {
+    "status": "starting",
+    "last_cycle": None,
+    "last_ok": None,
+    "consecutive_failures": 0,
+    "cycles_today": 0,
+}
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    """Minimal JSON health endpoint — GET / or GET /health."""
+
+    def do_GET(self):
+        import json
+        healthy = (_health_state["status"] == "running"
+                   and _health_state["consecutive_failures"] < 5)
+        code = 200 if healthy else 503
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(_health_state, default=str).encode())
+
+    def log_message(self, *_args):
+        pass  # suppress access logs
+
+
+def _start_health_server():
+    port = int(os.environ.get("PORT", "10000"))
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    logger.info("Health-check server listening on :%d", port)
+
+# ------------------------------------------------------------------
 # Trading hours
 # ------------------------------------------------------------------
 
@@ -336,7 +374,7 @@ def run_cycle(page, cycle_time: datetime):
     expiry_dates = _get_expiry_dates(page)
     if not expiry_dates:
         logger.warning("No expiry dates — skipping cycle")
-        return False
+        return {"ok": False, "rows": 0, "expiries": 0}
 
     logger.info("Expiry dates: %s",
                 [d.isoformat() for d in expiry_dates])
@@ -345,6 +383,7 @@ def run_cycle(page, cycle_time: datetime):
     db._clear_table()
 
     success_count = 0
+    total_rows = 0
 
     for idx, exp_date in enumerate(expiry_dates):
         exp_iso = exp_date.isoformat()
@@ -370,6 +409,7 @@ def run_cycle(page, cycle_time: datetime):
             if db.upsert_items(date_str, time_str, exp_iso,
                                trade_dt, items):
                 success_count += 1
+            total_rows += len(items)
             logger.info("   [OK] %d records", len(items))
         else:
             db.upsert_no_trading(date_str, time_str, exp_iso)
@@ -378,7 +418,11 @@ def run_cycle(page, cycle_time: datetime):
         if idx < len(expiry_dates) - 1:
             time.sleep(random.uniform(3, 5))
 
-    return success_count > 0
+    return {
+        "ok": success_count > 0,
+        "rows": total_rows,
+        "expiries": len(expiry_dates),
+    }
 
 
 def is_last_cycle(now: datetime) -> bool:
@@ -397,6 +441,8 @@ def main():
     logger.info("  Interval : %d min", FETCH_INTERVAL // 60)
     logger.info("=" * 55)
 
+    _start_health_server()
+
     if not db.test_connection():
         logger.critical("Cannot connect to Supabase — exiting")
         sys.exit(1)
@@ -405,7 +451,12 @@ def main():
     strategy_triggered_week = None   # track which week the strategy ran
     settled_today = None             # track which date we settled
     weekly_summary_week = None       # track which week got summary
+    daily_summary_date = None        # track which date got daily summary
     consecutive_failures = 0         # crash detection counter
+    daily_cycles = 0                 # cycles completed today
+    daily_rows = 0                   # rows collected today
+    daily_errors = 0                 # errors today
+    daily_expiries = 0               # expiry dates seen today
 
     with sync_playwright() as pw:
         browser, context, page = launch_browser(pw)
@@ -425,6 +476,14 @@ def main():
                 shutdown.wait(timeout=wait)
                 continue
 
+            # Reset daily counters on new day
+            today_iso = now.strftime("%Y-%m-%d")
+            if daily_summary_date != today_iso and daily_summary_date is not None:
+                daily_cycles = 0
+                daily_rows = 0
+                daily_errors = 0
+                daily_expiries = 0
+
             # periodic browser restart
             if time.monotonic() - browser_born > BROWSER_RESTART:
                 logger.info("Restarting browser (age limit)")
@@ -441,7 +500,15 @@ def main():
             current_week = now.isocalendar()[1]
 
             try:
-                ok = run_cycle(page, now)
+                cycle_result = run_cycle(page, now)
+                ok = cycle_result["ok"]
+
+                # Track daily stats
+                if ok:
+                    daily_cycles += 1
+                    daily_rows += cycle_result["rows"]
+                    daily_expiries = max(daily_expiries,
+                                         cycle_result["expiries"])
 
                 # Weekly strategy trigger: first cycle with data
                 # inside the 12:00-13:00 window
@@ -466,7 +533,6 @@ def main():
                                      se, exc_info=True)
 
                 # Settlement: expiry day after 10:00 (opening price set)
-                today_iso = now.strftime("%Y-%m-%d")
                 if (ok
                         and now.time() >= SETTLEMENT_AFTER
                         and settled_today != today_iso):
@@ -500,9 +566,22 @@ def main():
                         logger.error("Backup error: %s", be, exc_info=True)
 
                 if ok and is_last_cycle(now):
+                    # Daily summary to Telegram
+                    if daily_summary_date != today_iso:
+                        try:
+                            logger.info("*** Sending daily summary ***")
+                            telegram_bot.alert_daily_summary(
+                                today_iso, daily_cycles, daily_rows,
+                                daily_expiries, daily_errors,
+                            )
+                            daily_summary_date = today_iso
+                        except Exception as de:
+                            logger.error("Daily summary error: %s", de)
+
                     logger.info("*** Last cycle of the day — saving to history ***")
                     db.copy_to_history()
                 if not ok:
+                    daily_errors += 1
                     consecutive_failures += 1
                     logger.warning("Cycle empty (%d consecutive) — recovering session",
                                    consecutive_failures)
@@ -516,7 +595,17 @@ def main():
                 else:
                     consecutive_failures = 0
 
+                # Update health state
+                _health_state.update({
+                    "status": "running",
+                    "last_cycle": now.isoformat(),
+                    "last_ok": ok,
+                    "consecutive_failures": consecutive_failures,
+                    "cycles_today": daily_cycles,
+                })
+
             except Exception as e:
+                daily_errors += 1
                 consecutive_failures += 1
                 logger.error("Cycle error (%d consecutive): %s",
                              consecutive_failures, e, exc_info=True)
@@ -529,6 +618,14 @@ def main():
                 except Exception as e2:
                     logger.critical("Recovery failed: %s", e2)
                     telegram_bot.alert_crash(f"Recovery failed: {e2}")
+
+                _health_state.update({
+                    "status": "error",
+                    "last_cycle": now.isoformat(),
+                    "last_ok": False,
+                    "consecutive_failures": consecutive_failures,
+                    "cycles_today": daily_cycles,
+                })
 
             logger.info("Sleeping %d min...", FETCH_INTERVAL // 60)
             shutdown.wait(timeout=FETCH_INTERVAL)

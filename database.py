@@ -41,7 +41,7 @@ VALID_COLUMNS = {
 
 
 def _init():
-    global _base_url, _api_key, _table
+    global _base_url, _api_key, _table, _history_table
     _base_url      = os.environ.get("SUPABASE_URL", "").rstrip("/")
     _api_key       = os.environ.get("SUPABASE_KEY", "")
     _table         = os.environ.get("SUPABASE_TABLE", "tase_putcall")
@@ -110,7 +110,11 @@ def upsert_items(fetch_date: str, fetch_time: str,
     Does NOT clear the table — call clear_table() once before the loop.
     """
     _ensure_init()
-    url = f"{_base_url}/rest/v1/{_table}"
+    # on_conflict ensures UPSERT — avoids 409 if two instances
+    # write simultaneously during a Render deploy
+    url = (f"{_base_url}/rest/v1/{_table}"
+           f"?on_conflict=fetch_date,fetch_time,expiry_date,"
+           f"derivativeid_call,derivativeid_put")
 
     rows = []
     for item in items:

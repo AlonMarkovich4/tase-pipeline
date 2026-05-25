@@ -364,7 +364,9 @@ def run_strategy():
     # 6. Save to Supabase
     if all_strategies:
         _save_strategies(all_strategies)
-        telegram_bot.alert_strategy_launch(len(all_strategies), future_expiries)
+        telegram_bot.alert_strategy_launch(
+            base_index, all_strategies, future_expiries,
+        )
 
     logger.info("IRON CONDOR STRATEGY ENGINE — DONE (%d variations)",
                 len(all_strategies))
@@ -531,7 +533,13 @@ def settle_expiry(expiry_date_iso: str):
         except Exception:
             pass
 
-        telegram_bot.alert_settlement(day_name, index_close, report)
+        # Get the base_index from when the strategy was entered
+        entry_base = _clean_numeric(
+            strategies[0].get("base_index_value", 0)
+        )
+        telegram_bot.alert_settlement(
+            day_name, index_close, entry_base, report,
+        )
 
     return settled == len(strategies)
 
