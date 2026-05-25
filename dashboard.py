@@ -556,25 +556,20 @@ elif page == "אסטרטגיות":
             f'<span class="day">יום {dn} — {exp_date}</span>{badge}</div>',
             unsafe_allow_html=True)
 
-        # ---------- Payoff Diagram — all variations ----------
+        # ---------- Compact Payoff Diagram ----------
         if not df_e.empty:
-            # Colour palette for up to 8 intervals
+            import numpy as np
+
             _COLORS = [
                 "#00E676", "#00B0FF", "#FFEA00", "#FF9100",
                 "#E040FB", "#FF1744", "#76FF03", "#18FFFF",
             ]
 
-            # Determine x-axis range from widest variation
-            all_lp = [N(r.get("long_put_strike")) or 0
-                      for _, r in df_e.iterrows()]
-            all_lc = [N(r.get("long_call_strike")) or 0
-                      for _, r in df_e.iterrows()]
-            x_lo = min(v for v in all_lp if v > 0) - 40 if any(v > 0 for v in all_lp) else 4200
-            x_hi = max(v for v in all_lc if v > 0) + 40 if any(v > 0 for v in all_lc) else 4800
-
-            # Build x-axis sample points
-            import numpy as np
-            xs = np.linspace(x_lo, x_hi, 500)
+            all_lp = [N(r.get("long_put_strike")) or 0 for _, r in df_e.iterrows()]
+            all_lc = [N(r.get("long_call_strike")) or 0 for _, r in df_e.iterrows()]
+            x_lo = min((v for v in all_lp if v > 0), default=4200) - 20
+            x_hi = max((v for v in all_lc if v > 0), default=4800) + 20
+            xs = np.linspace(x_lo, x_hi, 300)
 
             fig = go.Figure()
 
@@ -583,28 +578,25 @@ elif page == "אסטרטגיות":
                 sp = N(r.get("short_put_strike")) or 0
                 sc = N(r.get("short_call_strike")) or 0
                 lc = N(r.get("long_call_strike")) or 0
-                prem = N(r.get("total_net_premium")) or 0
                 be_lo = N(r.get("breakeven_lower")) or 0
                 be_hi = N(r.get("breakeven_upper")) or 0
                 pct = N(r.get("interval_pct")) or 0
                 max_p = N(r.get("max_profit_ils")) or 0
                 max_l = N(r.get("max_risk_ils")) or 0
-                MULT = 100  # TASE multiplier
 
                 if lp == 0 or lc == 0:
                     continue
 
-                # Iron Condor payoff at expiry
                 ys = []
                 for x in xs:
                     if x <= lp:
                         pnl = -max_l
                     elif x <= sp:
-                        pnl = (x - lp) * MULT - max_l
+                        pnl = (x - lp) * 100 - max_l
                     elif x <= sc:
                         pnl = max_p
                     elif x <= lc:
-                        pnl = (lc - x) * MULT - max_l
+                        pnl = (lc - x) * 100 - max_l
                     else:
                         pnl = -max_l
                     ys.append(pnl)
@@ -614,86 +606,62 @@ elif page == "אסטרטגיות":
 
                 fig.add_trace(go.Scatter(
                     x=xs, y=ys, mode="lines",
-                    line=dict(color=color, width=2),
+                    line=dict(color=color, width=1.5),
                     name=label,
-                    hovertemplate=(
-                        f"<b>{label}</b><br>"
-                        "מדד: %{x:,.0f}<br>"
-                        "P&L: %{y:+,.0f} ₪<extra></extra>"
-                    ),
+                    hovertemplate=f"<b>{label}</b> | P&L: %{{y:+,.0f}} ₪<extra></extra>",
                 ))
 
-                # Break-even markers
+                # BE markers
                 fig.add_trace(go.Scatter(
                     x=[be_lo, be_hi], y=[0, 0],
                     mode="markers",
-                    marker=dict(size=7, color=color, symbol="diamond",
-                                line=dict(width=1, color="#000")),
+                    marker=dict(size=5, color=color, symbol="diamond"),
                     showlegend=False,
-                    hovertemplate=(
-                        f"<b>BE {label}</b><br>"
-                        "%{{x:,.0f}}<extra></extra>"
-                    ),
+                    hovertemplate=f"BE {label}: %{{x:,.0f}}<extra></extra>",
                 ))
 
-            # Zero P&L line
-            fig.add_hline(y=0, line_width=1,
-                          line_dash="dash", line_color=C_DIM)
+            fig.add_hline(y=0, line_width=0.8, line_dash="dash",
+                          line_color="rgba(107,123,141,0.4)")
 
-            # Current index vertical line
             if idx > 0:
                 fig.add_vline(
-                    x=idx, line_width=2,
-                    line_dash="dot", line_color=C_BLUE,
-                    annotation_text=f"TA-35: {idx:,.0f}",
+                    x=idx, line_width=1.5, line_dash="dot",
+                    line_color=C_BLUE,
+                    annotation_text=f"{idx:,.0f}",
                     annotation_position="top",
-                    annotation_font=dict(size=11, color=C_BLUE),
+                    annotation_font=dict(size=9, color=C_BLUE),
                 )
 
-            # Settlement line (if settled)
             if has_res and "actual_index_close" in df_e.columns:
                 close_val = N(df_e["actual_index_close"].iloc[0])
                 if close_val and close_val > 0:
                     fig.add_vline(
-                        x=close_val, line_width=2,
-                        line_dash="solid", line_color=C_RED,
-                        annotation_text=f"פקיעה: {close_val:,.0f}",
+                        x=close_val, line_width=1.5,
+                        line_color=C_RED,
+                        annotation_text=f"{close_val:,.0f}",
                         annotation_position="top right",
-                        annotation_font=dict(size=11, color=C_RED),
+                        annotation_font=dict(size=9, color=C_RED),
                     )
 
             fig.update_layout(
-                xaxis=dict(
-                    range=[x_lo, x_hi],
-                    title=dict(text="TA-35 Index", font=dict(size=11, color=C_DIM)),
-                    showgrid=True,
-                    gridcolor=C_GRID,
-                    tickfont=dict(size=10, color=C_DIM),
-                ),
-                yaxis=dict(
-                    title=dict(text="P&L (₪)", font=dict(size=11, color=C_DIM)),
-                    showgrid=True,
-                    gridcolor=C_GRID,
-                    tickfont=dict(size=10, color=C_DIM),
-                    tickformat="+,.0f",
-                    zeroline=False,
-                ),
-                height=380,
-                margin=dict(l=60, r=20, t=30, b=40),
-                plot_bgcolor=C_CARD,
-                paper_bgcolor=C_CARD,
-                font=dict(family="Inter", color=C_TEXT),
+                xaxis=dict(range=[x_lo, x_hi], showgrid=False,
+                           tickfont=dict(size=9, color=C_DIM)),
+                yaxis=dict(showgrid=True, gridcolor=C_GRID,
+                           tickfont=dict(size=9, color=C_DIM),
+                           tickformat="+,.0f", zeroline=False),
+                height=220,
+                margin=dict(l=50, r=10, t=8, b=8),
+                plot_bgcolor=C_CARD, paper_bgcolor=C_CARD,
+                font=dict(family="Inter", color=C_TEXT, size=10),
                 legend=dict(
-                    orientation="h",
-                    yanchor="bottom", y=-0.25,
+                    orientation="h", yanchor="top", y=-0.08,
                     xanchor="center", x=0.5,
-                    font=dict(size=11, color=C_DIM),
+                    font=dict(size=10, color=C_DIM),
                     bgcolor="rgba(0,0,0,0)",
+                    itemwidth=30,
                 ),
-                hoverlabel=dict(
-                    bgcolor=C_CARD, bordercolor=C_BORDER,
-                    font=dict(color=C_TEXT),
-                ),
+                hoverlabel=dict(bgcolor=C_CARD, bordercolor=C_BORDER,
+                                font=dict(color=C_TEXT, size=10)),
                 hovermode="x unified",
             )
             st.plotly_chart(fig, use_container_width=True,
