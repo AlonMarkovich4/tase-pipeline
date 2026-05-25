@@ -556,144 +556,153 @@ elif page == "אסטרטגיות":
             f'<span class="day">יום {dn} — {exp_date}</span>{badge}</div>',
             unsafe_allow_html=True)
 
-        # ---------- Payoff Diagram ----------
+        # ---------- Break-Even Range Chart ----------
         if not df_e.empty:
-            import numpy as np
-
-            # Muted palette — blends with the dark card background
-            _COLORS = [
-                "rgba(0,230,118,0.7)",   # green
-                "rgba(0,176,255,0.7)",   # blue
-                "rgba(255,234,0,0.55)",  # yellow
-                "rgba(255,145,0,0.65)",  # orange
-                "rgba(224,64,251,0.6)",  # purple
-                "rgba(255,23,68,0.6)",   # red
-                "rgba(118,255,3,0.55)",  # lime
-                "rgba(24,255,255,0.55)", # cyan
-            ]
-            _COLORS_SOLID = [
-                "#00E676", "#00B0FF", "#FFEA00", "#FF9100",
-                "#E040FB", "#FF1744", "#76FF03", "#18FFFF",
-            ]
-
-            all_lp = [N(r.get("long_put_strike")) or 0 for _, r in df_e.iterrows()]
-            all_lc = [N(r.get("long_call_strike")) or 0 for _, r in df_e.iterrows()]
-            x_lo = min((v for v in all_lp if v > 0), default=4200) - 15
-            x_hi = max((v for v in all_lc if v > 0), default=4800) + 15
-            xs = np.linspace(x_lo, x_hi, 250)
-
-            fig = go.Figure()
-
-            for i, (_, r) in enumerate(df_e.iterrows()):
-                lp = N(r.get("long_put_strike")) or 0
-                sp = N(r.get("short_put_strike")) or 0
-                sc = N(r.get("short_call_strike")) or 0
-                lc = N(r.get("long_call_strike")) or 0
-                be_lo = N(r.get("breakeven_lower")) or 0
-                be_hi = N(r.get("breakeven_upper")) or 0
+            rows_data = []
+            for _, r in df_e.iterrows():
+                lp  = N(r.get("long_put_strike")) or 0
+                sp  = N(r.get("short_put_strike")) or 0
+                sc  = N(r.get("short_call_strike")) or 0
+                lc  = N(r.get("long_call_strike")) or 0
+                bl  = N(r.get("breakeven_lower")) or 0
+                bh  = N(r.get("breakeven_upper")) or 0
                 pct = N(r.get("interval_pct")) or 0
-                max_p = N(r.get("max_profit_ils")) or 0
-                max_l = N(r.get("max_risk_ils")) or 0
-
+                mp  = N(r.get("max_profit_ils")) or 0
+                mr  = N(r.get("max_risk_ils")) or 0
                 if lp == 0 or lc == 0:
                     continue
+                rows_data.append(dict(
+                    pct=pct, lp=lp, sp=sp, sc=sc, lc=lc,
+                    bl=bl, bh=bh, mp=mp, mr=mr))
 
-                ys = []
-                for x in xs:
-                    if x <= lp:
-                        pnl = -max_l
-                    elif x <= sp:
-                        pnl = (x - lp) * 100 - max_l
-                    elif x <= sc:
-                        pnl = max_p
-                    elif x <= lc:
-                        pnl = (lc - x) * 100 - max_l
-                    else:
-                        pnl = -max_l
-                    ys.append(pnl)
+            if rows_data:
+                # Sort widest at top (reversed for plotly y-axis)
+                rows_data.sort(key=lambda d: d["pct"])
+                labels = [f"{d['pct']:.1f}%" for d in rows_data]
+                x_lo = min(d["lp"] for d in rows_data) - 20
+                x_hi = max(d["lc"] for d in rows_data) + 20
 
-                color = _COLORS[i % len(_COLORS)]
-                solid = _COLORS_SOLID[i % len(_COLORS_SOLID)]
-                label = f"{pct:.1f}%"
+                fig = go.Figure()
 
-                fig.add_trace(go.Scatter(
-                    x=xs, y=ys, mode="lines",
-                    line=dict(color=color, width=1.2),
-                    name=label,
-                    hovertemplate=f"{label} | %{{y:+,.0f}} ₪<extra></extra>",
-                ))
+                for i, d in enumerate(rows_data):
+                    y = labels[i]
 
-                # Small BE dots on zero line
-                fig.add_trace(go.Scatter(
-                    x=[be_lo, be_hi], y=[0, 0],
-                    mode="markers",
-                    marker=dict(size=4, color=solid, symbol="circle"),
-                    showlegend=False,
-                    hovertemplate=f"BE {label}: %{{x:,.0f}}<extra></extra>",
-                ))
+                    # Risk zone left (Long Put → BE lower)
+                    fig.add_trace(go.Bar(
+                        x=[d["bl"] - d["lp"]], y=[y],
+                        base=d["lp"], orientation="h",
+                        marker=dict(color="rgba(255,23,68,0.15)",
+                                    line=dict(width=0)),
+                        width=0.5, showlegend=False,
+                        hovertemplate=(
+                            f"<b>{y}</b> הפסד<br>"
+                            f"Long Put: {d['lp']:,.0f}<br>"
+                            f"BE: {d['bl']:,.0f}<br>"
+                            f"סיכון: -{d['mr']:,.0f} ₪"
+                            "<extra></extra>"),
+                    ))
 
-            # Zero line
-            fig.add_hline(y=0, line_width=0.5,
-                          line_color="rgba(107,123,141,0.3)")
+                    # Profit zone (BE lower → BE upper)
+                    fig.add_trace(go.Bar(
+                        x=[d["bh"] - d["bl"]], y=[y],
+                        base=d["bl"], orientation="h",
+                        marker=dict(color="rgba(0,230,118,0.25)",
+                                    line=dict(width=0)),
+                        width=0.5, showlegend=False,
+                        hovertemplate=(
+                            f"<b>{y}</b> רווח<br>"
+                            f"BE: {d['bl']:,.0f} — {d['bh']:,.0f}<br>"
+                            f"Short Put: {d['sp']:,.0f} | "
+                            f"Short Call: {d['sc']:,.0f}<br>"
+                            f"רווח מקס: +{d['mp']:,.0f} ₪"
+                            "<extra></extra>"),
+                    ))
 
-            # Current index
-            if idx > 0:
-                fig.add_vline(
-                    x=idx, line_width=1, line_dash="dot",
-                    line_color="rgba(0,176,255,0.5)",
-                    annotation_text=f"{idx:,.0f}",
-                    annotation_position="top",
-                    annotation_font=dict(size=8, color=C_BLUE),
-                )
+                    # Risk zone right (BE upper → Long Call)
+                    fig.add_trace(go.Bar(
+                        x=[d["lc"] - d["bh"]], y=[y],
+                        base=d["bh"], orientation="h",
+                        marker=dict(color="rgba(255,23,68,0.15)",
+                                    line=dict(width=0)),
+                        width=0.5, showlegend=False,
+                        hovertemplate=(
+                            f"<b>{y}</b> הפסד<br>"
+                            f"BE: {d['bh']:,.0f}<br>"
+                            f"Long Call: {d['lc']:,.0f}<br>"
+                            f"סיכון: -{d['mr']:,.0f} ₪"
+                            "<extra></extra>"),
+                    ))
 
-            # Settlement
-            if has_res and "actual_index_close" in df_e.columns:
-                cv = N(df_e["actual_index_close"].iloc[0])
-                if cv and cv > 0:
-                    fig.add_vline(
-                        x=cv, line_width=1,
-                        line_color="rgba(255,23,68,0.5)",
-                        annotation_text=f"{cv:,.0f}",
-                        annotation_position="top right",
-                        annotation_font=dict(size=8, color=C_RED),
+                    # Short strikes — inner ticks
+                    fig.add_trace(go.Scatter(
+                        x=[d["sp"], d["sc"]], y=[y, y],
+                        mode="markers",
+                        marker=dict(symbol="line-ns", size=8,
+                                    line=dict(width=1.5,
+                                              color="rgba(0,230,118,0.6)")),
+                        showlegend=False,
+                        hovertemplate=(
+                            f"Short: %{{x:,.0f}}<extra></extra>"),
+                    ))
+
+                    # Profit annotation on the right
+                    fig.add_annotation(
+                        x=d["lc"] + 3, y=y,
+                        text=f"+{d['mp']:,.0f}₪",
+                        showarrow=False, xanchor="left",
+                        font=dict(size=9, color=C_GREEN),
                     )
 
-            fig.update_layout(
-                xaxis=dict(
-                    range=[x_lo, x_hi], showgrid=False,
-                    showline=False, zeroline=False,
-                    tickfont=dict(size=8, color=C_DIM),
-                ),
-                yaxis=dict(
-                    showgrid=True,
-                    gridcolor="rgba(26,31,43,0.8)",
-                    showline=False, zeroline=False,
-                    tickfont=dict(size=8, color=C_DIM),
-                    tickformat="+,.0f",
-                ),
-                height=170,
-                margin=dict(l=45, r=8, t=4, b=24),
-                plot_bgcolor=C_CARD,
-                paper_bgcolor=C_CARD,
-                font=dict(family="Inter", color=C_TEXT, size=9),
-                legend=dict(
-                    orientation="h",
-                    yanchor="top", y=-0.15,
-                    xanchor="center", x=0.5,
-                    font=dict(size=9, color=C_DIM),
-                    bgcolor="rgba(0,0,0,0)",
-                    itemwidth=30,
-                    tracegroupgap=0,
-                ),
-                hoverlabel=dict(
-                    bgcolor=C_CARD,
-                    bordercolor=C_BORDER,
-                    font=dict(color=C_TEXT, size=9),
-                ),
-                hovermode="x unified",
-            )
-            st.plotly_chart(fig, use_container_width=True,
-                            key=f"payoff_{exp_date}")
+                # Current index line
+                if idx > 0:
+                    fig.add_vline(
+                        x=idx, line_width=1.5, line_dash="dot",
+                        line_color=C_BLUE,
+                        annotation_text=f"TA-35: {idx:,.0f}",
+                        annotation_position="top",
+                        annotation_font=dict(size=9, color=C_BLUE),
+                    )
+
+                # Settlement line
+                if has_res and "actual_index_close" in df_e.columns:
+                    cv = N(df_e["actual_index_close"].iloc[0])
+                    if cv and cv > 0:
+                        fig.add_vline(
+                            x=cv, line_width=1.5,
+                            line_color=C_RED,
+                            annotation_text=f"פקיעה: {cv:,.0f}",
+                            annotation_position="top right",
+                            annotation_font=dict(size=9, color=C_RED),
+                        )
+
+                n_rows = len(rows_data)
+                fig.update_layout(
+                    barmode="stack",
+                    xaxis=dict(
+                        range=[x_lo, x_hi + 60],
+                        showgrid=False, showline=False,
+                        zeroline=False,
+                        tickfont=dict(size=9, color=C_DIM),
+                    ),
+                    yaxis=dict(
+                        showgrid=False, showline=False,
+                        tickfont=dict(size=10, color=C_TEXT,
+                                      family="Inter"),
+                        autorange="reversed",
+                    ),
+                    height=max(120, 28 * n_rows + 50),
+                    margin=dict(l=4, r=4, t=20, b=4),
+                    plot_bgcolor=C_CARD,
+                    paper_bgcolor=C_CARD,
+                    font=dict(family="Inter", color=C_TEXT, size=9),
+                    hoverlabel=dict(
+                        bgcolor=C_CARD, bordercolor=C_BORDER,
+                        font=dict(color=C_TEXT, size=10),
+                    ),
+                    hovermode="closest",
+                )
+                st.plotly_chart(fig, use_container_width=True,
+                                key=f"range_{exp_date}")
 
         # ---------- Data table ----------
         tbl = []
