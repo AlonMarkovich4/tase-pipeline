@@ -556,20 +556,31 @@ elif page == "אסטרטגיות":
             f'<span class="day">יום {dn} — {exp_date}</span>{badge}</div>',
             unsafe_allow_html=True)
 
-        # ---------- Compact Payoff Diagram ----------
+        # ---------- Payoff Diagram ----------
         if not df_e.empty:
             import numpy as np
 
+            # Muted palette — blends with the dark card background
             _COLORS = [
+                "rgba(0,230,118,0.7)",   # green
+                "rgba(0,176,255,0.7)",   # blue
+                "rgba(255,234,0,0.55)",  # yellow
+                "rgba(255,145,0,0.65)",  # orange
+                "rgba(224,64,251,0.6)",  # purple
+                "rgba(255,23,68,0.6)",   # red
+                "rgba(118,255,3,0.55)",  # lime
+                "rgba(24,255,255,0.55)", # cyan
+            ]
+            _COLORS_SOLID = [
                 "#00E676", "#00B0FF", "#FFEA00", "#FF9100",
                 "#E040FB", "#FF1744", "#76FF03", "#18FFFF",
             ]
 
             all_lp = [N(r.get("long_put_strike")) or 0 for _, r in df_e.iterrows()]
             all_lc = [N(r.get("long_call_strike")) or 0 for _, r in df_e.iterrows()]
-            x_lo = min((v for v in all_lp if v > 0), default=4200) - 20
-            x_hi = max((v for v in all_lc if v > 0), default=4800) + 20
-            xs = np.linspace(x_lo, x_hi, 300)
+            x_lo = min((v for v in all_lp if v > 0), default=4200) - 15
+            x_hi = max((v for v in all_lc if v > 0), default=4800) + 15
+            xs = np.linspace(x_lo, x_hi, 250)
 
             fig = go.Figure()
 
@@ -602,66 +613,83 @@ elif page == "אסטרטגיות":
                     ys.append(pnl)
 
                 color = _COLORS[i % len(_COLORS)]
+                solid = _COLORS_SOLID[i % len(_COLORS_SOLID)]
                 label = f"{pct:.1f}%"
 
                 fig.add_trace(go.Scatter(
                     x=xs, y=ys, mode="lines",
-                    line=dict(color=color, width=1.5),
+                    line=dict(color=color, width=1.2),
                     name=label,
-                    hovertemplate=f"<b>{label}</b> | P&L: %{{y:+,.0f}} ₪<extra></extra>",
+                    hovertemplate=f"{label} | %{{y:+,.0f}} ₪<extra></extra>",
                 ))
 
-                # BE markers
+                # Small BE dots on zero line
                 fig.add_trace(go.Scatter(
                     x=[be_lo, be_hi], y=[0, 0],
                     mode="markers",
-                    marker=dict(size=5, color=color, symbol="diamond"),
+                    marker=dict(size=4, color=solid, symbol="circle"),
                     showlegend=False,
                     hovertemplate=f"BE {label}: %{{x:,.0f}}<extra></extra>",
                 ))
 
-            fig.add_hline(y=0, line_width=0.8, line_dash="dash",
-                          line_color="rgba(107,123,141,0.4)")
+            # Zero line
+            fig.add_hline(y=0, line_width=0.5,
+                          line_color="rgba(107,123,141,0.3)")
 
+            # Current index
             if idx > 0:
                 fig.add_vline(
-                    x=idx, line_width=1.5, line_dash="dot",
-                    line_color=C_BLUE,
+                    x=idx, line_width=1, line_dash="dot",
+                    line_color="rgba(0,176,255,0.5)",
                     annotation_text=f"{idx:,.0f}",
                     annotation_position="top",
-                    annotation_font=dict(size=9, color=C_BLUE),
+                    annotation_font=dict(size=8, color=C_BLUE),
                 )
 
+            # Settlement
             if has_res and "actual_index_close" in df_e.columns:
-                close_val = N(df_e["actual_index_close"].iloc[0])
-                if close_val and close_val > 0:
+                cv = N(df_e["actual_index_close"].iloc[0])
+                if cv and cv > 0:
                     fig.add_vline(
-                        x=close_val, line_width=1.5,
-                        line_color=C_RED,
-                        annotation_text=f"{close_val:,.0f}",
+                        x=cv, line_width=1,
+                        line_color="rgba(255,23,68,0.5)",
+                        annotation_text=f"{cv:,.0f}",
                         annotation_position="top right",
-                        annotation_font=dict(size=9, color=C_RED),
+                        annotation_font=dict(size=8, color=C_RED),
                     )
 
             fig.update_layout(
-                xaxis=dict(range=[x_lo, x_hi], showgrid=False,
-                           tickfont=dict(size=9, color=C_DIM)),
-                yaxis=dict(showgrid=True, gridcolor=C_GRID,
-                           tickfont=dict(size=9, color=C_DIM),
-                           tickformat="+,.0f", zeroline=False),
-                height=220,
-                margin=dict(l=50, r=10, t=8, b=8),
-                plot_bgcolor=C_CARD, paper_bgcolor=C_CARD,
-                font=dict(family="Inter", color=C_TEXT, size=10),
+                xaxis=dict(
+                    range=[x_lo, x_hi], showgrid=False,
+                    showline=False, zeroline=False,
+                    tickfont=dict(size=8, color=C_DIM),
+                ),
+                yaxis=dict(
+                    showgrid=True,
+                    gridcolor="rgba(26,31,43,0.8)",
+                    showline=False, zeroline=False,
+                    tickfont=dict(size=8, color=C_DIM),
+                    tickformat="+,.0f",
+                ),
+                height=170,
+                margin=dict(l=45, r=8, t=4, b=24),
+                plot_bgcolor=C_CARD,
+                paper_bgcolor=C_CARD,
+                font=dict(family="Inter", color=C_TEXT, size=9),
                 legend=dict(
-                    orientation="h", yanchor="top", y=-0.08,
+                    orientation="h",
+                    yanchor="top", y=-0.15,
                     xanchor="center", x=0.5,
-                    font=dict(size=10, color=C_DIM),
+                    font=dict(size=9, color=C_DIM),
                     bgcolor="rgba(0,0,0,0)",
                     itemwidth=30,
+                    tracegroupgap=0,
                 ),
-                hoverlabel=dict(bgcolor=C_CARD, bordercolor=C_BORDER,
-                                font=dict(color=C_TEXT, size=10)),
+                hoverlabel=dict(
+                    bgcolor=C_CARD,
+                    bordercolor=C_BORDER,
+                    font=dict(color=C_TEXT, size=9),
+                ),
                 hovermode="x unified",
             )
             st.plotly_chart(fig, use_container_width=True,
