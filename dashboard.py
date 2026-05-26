@@ -679,7 +679,7 @@ with tab_play:
             unsafe_allow_html=True)
 
         # Action buttons
-        btn_col1, btn_col2, btn_col3 = st.columns(3)
+        btn_col1, btn_col2 = st.columns(2)
         with btn_col1:
             if st.button("🚀 שגר אסטרטגיה לתיק הנבחר",
                          key="launch_strat_btn",
@@ -706,47 +706,165 @@ with tab_play:
                 st.session_state.leg_builder = []
                 st.rerun()
 
-        with btn_col3:
-            if st.button("🔄 Iron Condor מהיר",
-                         key="quick_condor_btn",
-                         use_container_width=True):
-                # Auto-populate a standard condor
-                pct = 2.0
-                offset = IDX * (pct / 100.0)
-                sp_t = IDX - offset
-                sc_t = IDX + offset
-                lp_t = sp_t - 20
-                lc_t = sc_t + 20
+    # ---- Quick Strategy Templates ----
+    st.markdown('<div class="sec">אסטרטגיות מוכנות — בנה בלחיצה</div>',
+                unsafe_allow_html=True)
 
-                def _closest(target, slist):
-                    return min(slist, key=lambda s: abs(s - target))
+    # Helpers for templates
+    def _closest(target, slist):
+        return min(slist, key=lambda s: abs(s - target))
 
-                sp_s = _closest(sp_t, strikes_list)
-                sc_s = _closest(sc_t, strikes_list)
-                lp_s = _closest(lp_t, strikes_list)
-                lc_s = _closest(lc_t, strikes_list)
+    def _get_price(strike, side):
+        m = next((c for c in chain_rows if c["strike"] == strike), None)
+        return m[f"{side}_price"] if m else 0
 
-                def _get_price(strike, side):
-                    m = next(
-                        (c for c in chain_rows if c["strike"] == strike),
-                        None)
-                    return m[f"{side}_price"] if m else 0
+    def _make_leg(typ, act, strike, side):
+        return {
+            "type": typ,
+            "action": act,
+            "strike": strike,
+            "price": _get_price(strike, side),
+            "qty": 1,
+            "sign": 1 if act == "Sell" else -1,
+        }
 
-                st.session_state.leg_builder = [
-                    {"type": "Put", "action": "Buy",
-                     "strike": lp_s, "price": _get_price(lp_s, "put"),
-                     "qty": 1, "sign": -1},
-                    {"type": "Put", "action": "Sell",
-                     "strike": sp_s, "price": _get_price(sp_s, "put"),
-                     "qty": 1, "sign": 1},
-                    {"type": "Call", "action": "Sell",
-                     "strike": sc_s, "price": _get_price(sc_s, "call"),
-                     "qty": 1, "sign": 1},
-                    {"type": "Call", "action": "Buy",
-                     "strike": lc_s, "price": _get_price(lc_s, "call"),
-                     "qty": 1, "sign": -1},
-                ]
-                st.rerun()
+    # ATM and offset strikes
+    atm = _closest(IDX, strikes_list)
+    otm_call_1 = _closest(IDX + IDX * 0.02, strikes_list)
+    otm_call_2 = _closest(IDX + IDX * 0.04, strikes_list)
+    otm_put_1 = _closest(IDX - IDX * 0.02, strikes_list)
+    otm_put_2 = _closest(IDX - IDX * 0.04, strikes_list)
+    wing = 20
+
+    # Strategy definitions
+    STRATEGIES = {
+        "Iron Condor": {
+            "icon": "🦅",
+            "desc": "מכירת Put + Call, קניית כנפיים. רווח מוגבל כשמדד נשאר בטווח.",
+            "outlook": "ניטרלי",
+            "legs": lambda: [
+                _make_leg("Put", "Buy",
+                          _closest(otm_put_1 - wing, strikes_list), "put"),
+                _make_leg("Put", "Sell", otm_put_1, "put"),
+                _make_leg("Call", "Sell", otm_call_1, "call"),
+                _make_leg("Call", "Buy",
+                          _closest(otm_call_1 + wing, strikes_list), "call"),
+            ],
+        },
+        "Bull Call Spread": {
+            "icon": "📈",
+            "desc": "קניית Call ATM + מכירת Call OTM. רווח כשמדד עולה.",
+            "outlook": "שורי (עלייה)",
+            "legs": lambda: [
+                _make_leg("Call", "Buy", atm, "call"),
+                _make_leg("Call", "Sell", otm_call_1, "call"),
+            ],
+        },
+        "Bear Put Spread": {
+            "icon": "📉",
+            "desc": "קניית Put ATM + מכירת Put OTM. רווח כשמדד יורד.",
+            "outlook": "דובי (ירידה)",
+            "legs": lambda: [
+                _make_leg("Put", "Buy", atm, "put"),
+                _make_leg("Put", "Sell", otm_put_1, "put"),
+            ],
+        },
+        "Long Straddle": {
+            "icon": "↕️",
+            "desc": "קניית Call + Put באותו Strike. רווח מתנועה חזקה לכל כיוון.",
+            "outlook": "תנודתיות גבוהה",
+            "legs": lambda: [
+                _make_leg("Call", "Buy", atm, "call"),
+                _make_leg("Put", "Buy", atm, "put"),
+            ],
+        },
+        "Short Straddle": {
+            "icon": "⏸️",
+            "desc": "מכירת Call + Put באותו Strike. רווח כשמדד לא זז.",
+            "outlook": "תנודתיות נמוכה",
+            "legs": lambda: [
+                _make_leg("Call", "Sell", atm, "call"),
+                _make_leg("Put", "Sell", atm, "put"),
+            ],
+        },
+        "Long Strangle": {
+            "icon": "🔀",
+            "desc": "קניית Call OTM + Put OTM. זול מ-Straddle, צריך תנועה חזקה יותר.",
+            "outlook": "תנודתיות גבוהה",
+            "legs": lambda: [
+                _make_leg("Call", "Buy", otm_call_1, "call"),
+                _make_leg("Put", "Buy", otm_put_1, "put"),
+            ],
+        },
+        "Short Strangle": {
+            "icon": "🔒",
+            "desc": "מכירת Call OTM + Put OTM. כמו Iron Condor בלי כנפיים — סיכון לא מוגבל.",
+            "outlook": "ניטרלי",
+            "legs": lambda: [
+                _make_leg("Call", "Sell", otm_call_1, "call"),
+                _make_leg("Put", "Sell", otm_put_1, "put"),
+            ],
+        },
+        "Butterfly (Call)": {
+            "icon": "🦋",
+            "desc": "קניית Call נמוך + מכירת 2 Call ATM + קניית Call גבוה. רווח מקסימלי ב-ATM.",
+            "outlook": "ניטרלי — מדד נשאר במקום",
+            "legs": lambda: [
+                _make_leg("Call", "Buy", otm_put_1, "call"),
+                {"type": "Call", "action": "Sell", "strike": atm,
+                 "price": _get_price(atm, "call"), "qty": 2, "sign": 1},
+                _make_leg("Call", "Buy", otm_call_1, "call"),
+            ],
+        },
+        "Naked Call": {
+            "icon": "⚡",
+            "desc": "מכירת Call OTM בלי הגנה. פרמיה מיידית, סיכון לא מוגבל.",
+            "outlook": "דובי / ניטרלי",
+            "legs": lambda: [
+                _make_leg("Call", "Sell", otm_call_1, "call"),
+            ],
+        },
+        "Naked Put": {
+            "icon": "🎯",
+            "desc": "מכירת Put OTM בלי הגנה. פרמיה מיידית, סיכון גבוה.",
+            "outlook": "שורי / ניטרלי",
+            "legs": lambda: [
+                _make_leg("Put", "Sell", otm_put_1, "put"),
+            ],
+        },
+    }
+
+    # Render strategy cards in 2-column grid
+    strat_names = list(STRATEGIES.keys())
+    for row_i in range(0, len(strat_names), 2):
+        cols = st.columns(2)
+        for col_i, col in enumerate(cols):
+            idx_s = row_i + col_i
+            if idx_s >= len(strat_names):
+                break
+            name = strat_names[idx_s]
+            s = STRATEGIES[name]
+            with col:
+                st.markdown(
+                    f'<div style="background:{C_CARD};'
+                    f'border:1px solid {C_BORDER};border-radius:8px;'
+                    f'padding:12px 14px;margin-bottom:8px;">'
+                    f'<div style="font-size:14px;font-weight:700;'
+                    f'color:{C_TEXT};">'
+                    f'{s["icon"]} {name}</div>'
+                    f'<div style="font-size:11px;color:{C_DIM};'
+                    f'margin:4px 0;">{s["desc"]}</div>'
+                    f'<div style="font-size:10px;color:{C_BLUE};">'
+                    f'תחזית: {s["outlook"]}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True)
+                if st.button(
+                    f"טען {name}",
+                    key=f"tmpl_{name}",
+                    use_container_width=True,
+                ):
+                    st.session_state.leg_builder = s["legs"]()
+                    st.rerun()
 
     # ==============================================================
     # 1C. ACTIVE POSITIONS + PAYOFF + SIMULATOR
