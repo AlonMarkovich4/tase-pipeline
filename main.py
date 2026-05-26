@@ -538,8 +538,11 @@ def main():
                         and settled_today != today_iso):
                     try:
                         logger.info("*** Checking settlement for expiry %s ***", today_iso)
-                        strategy_engine.settle_expiry(today_iso)
-                        settled_today = today_iso
+                        result = strategy_engine.settle_expiry(today_iso)
+                        if result:
+                            settled_today = today_iso
+                        # If False (no strategies or failed), don't mark —
+                        # allow retry if strategies are created later today
                     except Exception as se:
                         logger.error("Settlement error: %s", se, exc_info=True)
 
@@ -551,7 +554,8 @@ def main():
                     try:
                         logger.info("*** Sending weekly summary (week %d) ***",
                                     current_week)
-                        stats = strategy_engine.get_weekly_stats(current_week)
+                        stats = strategy_engine.get_weekly_stats(
+                            current_week, now.isocalendar()[0])
                         if stats and stats.get("trades", 0) > 0:
                             telegram_bot.alert_weekly_summary(stats)
                             weekly_summary_week = current_week

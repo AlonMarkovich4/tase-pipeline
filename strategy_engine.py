@@ -299,13 +299,29 @@ def _calculate_condor(base_index: float, interval_pct: float,
     }
 
 
+def _strategies_exist_for_week(trigger_date: str) -> bool:
+    """Check if strategies already exist for this trigger date."""
+    url = (f"{_base_url}/rest/v1/iron_condor_strategies"
+           f"?trigger_date=eq.{trigger_date}&select=id&limit=1")
+    try:
+        r = httpx.get(url, headers=_headers(), timeout=10)
+        if r.status_code in (200, 206):
+            return len(r.json()) > 0
+    except Exception:
+        pass
+    return False
+
+
 def _save_strategies(strategies: list) -> bool:
-    """Save all strategy rows to Supabase."""
-    url = f"{_base_url}/rest/v1/iron_condor_strategies"
+    """Save all strategy rows to Supabase with UPSERT."""
+    url = (f"{_base_url}/rest/v1/iron_condor_strategies"
+           f"?on_conflict=trigger_date,expiry_date,interval_pct")
+    headers = _headers()
+    headers["Prefer"] = "resolution=merge-duplicates"
     payload = json.dumps(strategies, ensure_ascii=False)
 
     try:
-        r = httpx.post(url, headers=_headers(),
+        r = httpx.post(url, headers=headers,
                        content=payload, timeout=30)
         if r.status_code in (200, 201, 204):
             logger.info("Strategy: saved %d rows to iron_condor_strategies",
@@ -335,6 +351,12 @@ def run_strategy():
     logger.info("=" * 50)
     logger.info("IRON CONDOR STRATEGY ENGINE — START")
     logger.info("Trigger: %s %s", trigger_date, trigger_time)
+
+    # 0. Check if strategies already exist for today (prevent duplicates on restart)
+    if _strategies_exist_for_week(trigger_date):
+        logger.info("Strategy: already exists for %s — skipping (restart-safe)",
+                     trigger_date)
+        return True
 
     # 1. Read live data
     rows = _read_live_data()
@@ -447,7 +469,7 @@ def settle_expiry(expiry_date_iso: str):
 
     if not strategies:
         logger.info("Settlement: no unsettled strategies for %s", expiry_date_iso)
-        return True
+        return False  # Don't mark as settled — strategies may be created later
 
     logger.info("Settling %d strategies...", len(strategies))
 
@@ -575,7 +597,7 @@ def settle_expiry(expiry_date_iso: str):
 # Weekly stats for summary report
 # ------------------------------------------------------------------
 
-def get_weekly_stats(iso_week: int) -> dict:
+def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
     """Gather stats for the given ISO week number for the weekly summary."""
     _init()
 
@@ -607,7 +629,8 @@ def get_weekly_stats(iso_week: int) -> dict:
         all_rows.append(pnl)
         try:
             d = date.fromisoformat(row["trigger_date"])
-            if d.isocalendar()[1] == iso_week:
+            cal = d.isocalendar()
+            if cal[1] == iso_week and (iso_year == 0 or cal[0] == iso_year):
                 week_rows.append(row)
         except (ValueError, KeyError):
             continue
