@@ -18,7 +18,6 @@ from datetime import datetime, timedelta, date, time as dt_time
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-import pandas as pd
 from playwright.sync_api import sync_playwright
 
 import database as db
@@ -90,6 +89,7 @@ signal.signal(signal.SIGTERM, _on_signal)
 # ------------------------------------------------------------------
 # Health-check HTTP endpoint (Render pings PORT to verify liveness)
 # ------------------------------------------------------------------
+import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 _health_state: dict = {
@@ -105,7 +105,6 @@ class _HealthHandler(BaseHTTPRequestHandler):
     """Minimal JSON health endpoint — GET / or GET /health."""
 
     def do_GET(self):
-        import json
         healthy = (_health_state["status"] == "running"
                    and _health_state["consecutive_failures"] < 5)
         code = 200 if healthy else 503
@@ -198,11 +197,24 @@ def recover_session(pw, browser, context, page):
         pass
 
     logger.warning("Full browser restart...")
+    saved_cookies = []
+    try:
+        saved_cookies = context.cookies()
+    except Exception:
+        pass
     try:
         browser.close()
     except Exception:
         pass
-    return launch_browser(pw)
+    browser, context, page = launch_browser(pw)
+    if saved_cookies:
+        try:
+            context.add_cookies(saved_cookies)
+            logger.info("Restored %d cookies after recovery",
+                        len(saved_cookies))
+        except Exception:
+            pass
+    return browser, context, page
 
 
 # ------------------------------------------------------------------
@@ -451,7 +463,9 @@ def main():
     strategy_triggered_week = None   # track which week the strategy ran
     settled_today = None             # track which date we settled
     weekly_summary_week = None       # track which week got summary
+    weekly_backup_week = None        # track which week got backup
     daily_summary_date = None        # track which date got daily summary
+    history_copied_date = None       # track which date got copied to history
     current_day = None               # track current day for counter resets
     consecutive_failures = 0         # crash detection counter
     daily_cycles = 0                 # cycles completed today
@@ -486,14 +500,26 @@ def main():
                 daily_expiries = 0
                 current_day = today_iso
 
-            # periodic browser restart
+            # periodic browser restart (preserve cookies/session)
             if time.monotonic() - browser_born > BROWSER_RESTART:
                 logger.info("Restarting browser (age limit)")
+                saved_cookies = []
+                try:
+                    saved_cookies = context.cookies()
+                except Exception:
+                    pass
                 try:
                     browser.close()
                 except Exception:
                     pass
                 browser, context, page = launch_browser(pw)
+                if saved_cookies:
+                    try:
+                        context.add_cookies(saved_cookies)
+                        logger.info("Restored %d cookies after restart",
+                                    len(saved_cookies))
+                    except Exception:
+                        pass
                 browser_born = time.monotonic()
 
             logger.info("-" * 50)
@@ -548,9 +574,14 @@ def main():
                     except Exception as se:
                         logger.error("Settlement error: %s", se, exc_info=True)
 
-                # Weekly summary: Friday only, after 17:00
+                # Weekly summary: last trading day of the week
+                # Sends on last cycle (after 17:00) on Wed/Thu/Fri.
+                # weekly_summary_week guard prevents duplicates, so
+                # the earliest qualifying day that runs becomes the
+                # sender. If Thu is last trading day — it sends.
+                # If Fri also trades — already sent, skipped.
                 if (ok
-                        and now.weekday() == 4  # Friday
+                        and now.weekday() >= 2  # Wed or later
                         and now.time() >= WEEKLY_SUMMARY
                         and is_last_cycle(now)
                         and weekly_summary_week != current_week):
@@ -565,14 +596,17 @@ def main():
                     except Exception as we:
                         logger.error("Weekly summary error: %s", we, exc_info=True)
 
-                    # Weekly backup to Supabase Storage
-                    try:
-                        logger.info("*** Weekly backup to storage ***")
-                        db.backup_to_storage()
-                    except Exception as be:
-                        logger.error("Backup error: %s", be, exc_info=True)
-
                 if ok and is_last_cycle(now):
+                    # Weekly backup — runs on last cycle of last trading day
+                    if (now.weekday() >= 2
+                            and weekly_backup_week != current_week):
+                        try:
+                            logger.info("*** Weekly backup to storage ***")
+                            if db.backup_to_storage():
+                                weekly_backup_week = current_week
+                        except Exception as be:
+                            logger.error("Backup error: %s", be, exc_info=True)
+
                     # Daily summary to Telegram
                     if daily_summary_date != today_iso:
                         try:
@@ -585,8 +619,10 @@ def main():
                         except Exception as de:
                             logger.error("Daily summary error: %s", de)
 
-                    logger.info("*** Last cycle of the day — saving to history ***")
-                    db.copy_to_history()
+                    if history_copied_date != today_iso:
+                        logger.info("*** Last cycle of the day — saving to history ***")
+                        if db.copy_to_history():
+                            history_copied_date = today_iso
                 if not ok:
                     daily_errors += 1
                     consecutive_failures += 1

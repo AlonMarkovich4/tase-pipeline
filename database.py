@@ -40,8 +40,11 @@ VALID_COLUMNS = {
 }
 
 
+_cached_headers: dict = {}
+
+
 def _init():
-    global _base_url, _api_key, _table, _history_table
+    global _base_url, _api_key, _table, _history_table, _cached_headers
     _base_url      = os.environ.get("SUPABASE_URL", "").rstrip("/")
     _api_key       = os.environ.get("SUPABASE_KEY", "")
     _table         = os.environ.get("SUPABASE_TABLE", "tase_putcall")
@@ -50,6 +53,12 @@ def _init():
         raise RuntimeError(
             "SUPABASE_URL and SUPABASE_KEY environment variables must be set"
         )
+    _cached_headers = {
+        "apikey":        _api_key,
+        "Authorization": f"Bearer {_api_key}",
+        "Content-Type":  "application/json",
+        "Prefer":        "resolution=merge-duplicates",
+    }
 
 
 def _ensure_init():
@@ -58,12 +67,7 @@ def _ensure_init():
 
 
 def _headers() -> dict:
-    return {
-        "apikey":        _api_key,
-        "Authorization": f"Bearer {_api_key}",
-        "Content-Type":  "application/json",
-        "Prefer":        "resolution=merge-duplicates",
-    }
+    return _cached_headers.copy()
 
 
 # ------------------------------------------------------------------
@@ -203,14 +207,25 @@ def copy_to_history(max_retries: int = 3) -> bool:
     """
     _ensure_init()
 
-    # 1. Read all rows from live table
-    read_url = f"{_base_url}/rest/v1/{_table}?select=*"
+    # 1. Read all rows from live table (paginated)
+    rows = []
+    batch_sz = 1000
+    offset = 0
     try:
-        r = httpx.get(read_url, headers=_headers(), timeout=30)
-        if r.status_code not in (200, 206):
-            logger.error("History read failed: %d", r.status_code)
-            return False
-        rows = r.json()
+        while True:
+            read_url = (f"{_base_url}/rest/v1/{_table}"
+                        f"?select=*&order=id&limit={batch_sz}&offset={offset}")
+            r = httpx.get(read_url, headers=_headers(), timeout=30)
+            if r.status_code not in (200, 206):
+                logger.error("History read failed: %d", r.status_code)
+                return False
+            chunk = r.json()
+            if not chunk:
+                break
+            rows.extend(chunk)
+            if len(chunk) < batch_sz:
+                break
+            offset += batch_sz
     except Exception as e:
         logger.error("History read error: %s", e)
         return False

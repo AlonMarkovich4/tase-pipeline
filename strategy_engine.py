@@ -33,20 +33,22 @@ DAY_NAMES = {
 
 _base_url: str = ""
 _api_key:  str = ""
+_cached_headers: dict = {}
 
 
 def _init():
-    global _base_url, _api_key
+    global _base_url, _api_key, _cached_headers
     _base_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     _api_key  = os.environ.get("SUPABASE_KEY", "")
-
-
-def _headers() -> dict:
-    return {
+    _cached_headers = {
         "apikey":        _api_key,
         "Authorization": f"Bearer {_api_key}",
         "Content-Type":  "application/json",
     }
+
+
+def _headers() -> dict:
+    return _cached_headers.copy()
 
 
 def _clean_numeric(val) -> float:
@@ -202,13 +204,19 @@ def _get_base_index(rows: list) -> float:
 
 
 def _find_closest_option(rows: list, target_strike: float,
-                         side: str) -> dict:
+                         side: str,
+                         exclude_strikes: set | None = None) -> dict:
     """
     Find the option closest to target_strike that has an actual
     trading price (lastrate > 0).  Falls back to closest without
     price only if no priced option exists.
     side: 'call' or 'put'
+    exclude_strikes: strikes already used (prevents Short & Long
+                     from selecting the same option)
     """
+    if exclude_strikes is None:
+        exclude_strikes = set()
+
     best_priced = None
     best_priced_diff = float("inf")
     best_any = None
@@ -222,6 +230,8 @@ def _find_closest_option(rows: list, target_strike: float,
     for row in rows:
         strike = _clean_numeric(row.get(strike_col))
         if strike <= 0:
+            continue
+        if strike in exclude_strikes:
             continue
         price = _clean_numeric(row.get(price_col))
         diff = abs(strike - target_strike)
@@ -270,11 +280,13 @@ def _calculate_condor(base_index: float, interval_pct: float,
     long_call_strike = short_call_strike + WING_WIDTH
     long_put_strike  = short_put_strike - WING_WIDTH
 
-    # Find closest real options
+    # Find closest real options (Short first, then Long excludes Short's strike)
     short_call = _find_closest_option(rows_for_expiry, short_call_strike, "call")
-    long_call  = _find_closest_option(rows_for_expiry, long_call_strike, "call")
     short_put  = _find_closest_option(rows_for_expiry, short_put_strike, "put")
-    long_put   = _find_closest_option(rows_for_expiry, long_put_strike, "put")
+    long_call  = _find_closest_option(rows_for_expiry, long_call_strike, "call",
+                                      exclude_strikes={short_call["strike"]})
+    long_put   = _find_closest_option(rows_for_expiry, long_put_strike, "put",
+                                      exclude_strikes={short_put["strike"]})
 
     # ------------------------------------------------------------------
     # Validate strike order: LP < SP < SC < LC
@@ -378,9 +390,18 @@ def _calculate_condor(base_index: float, interval_pct: float,
 
 
 def _strategies_exist_for_week(trigger_date: str) -> bool:
-    """Check if strategies already exist for this trigger date."""
+    """Check if strategies already exist for this ISO week."""
+    try:
+        d = date.fromisoformat(trigger_date)
+        monday = d - timedelta(days=d.weekday())
+        friday = monday + timedelta(days=4)
+    except ValueError:
+        return False
+
     url = (f"{_base_url}/rest/v1/iron_condor_strategies"
-           f"?trigger_date=eq.{trigger_date}&select=id&limit=1")
+           f"?trigger_date=gte.{monday.isoformat()}"
+           f"&trigger_date=lte.{friday.isoformat()}"
+           f"&select=id&limit=1")
     try:
         r = httpx.get(url, headers=_headers(), timeout=10)
         if r.status_code in (200, 206):
@@ -518,10 +539,15 @@ def settle_expiry(expiry_date_iso: str):
     # 1. Get settlement price (opening price of expiry day)
     index_close = _fetch_settlement_price()
     if index_close <= 0:
-        # Fallback: try from live data
+        # Fallback: try underlingasset from live data (skip Yahoo —
+        # _fetch_settlement_price already tried it)
         rows = _read_live_data()
-        if rows:
-            index_close = _get_base_index(rows)
+        for row in rows:
+            v = _clean_numeric(row.get("underlingasset_call"))
+            if v > 0:
+                index_close = v
+                logger.info("Settlement price from live data: %.2f", v)
+                break
     if index_close <= 0:
         logger.error("Settlement: could not get settlement price — aborting")
         return False
@@ -722,24 +748,6 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
     if not week_rows:
         return {}
 
-    # 2. Read cumulative total (all time) — only the pnl column
-    cum_url = (
-        f"{_base_url}/rest/v1/iron_condor_strategies"
-        f"?result_status=not.is.null"
-        f"&select=actual_pnl_ils"
-        f"&limit=10000"
-    )
-    cumulative_total = 0
-    try:
-        rr = httpx.get(cum_url, headers=_headers(), timeout=15)
-        if rr.status_code in (200, 206):
-            cumulative_total = sum(
-                _clean_numeric(r.get("actual_pnl_ils", 0))
-                for r in rr.json()
-            )
-    except Exception:
-        pass
-
     # Compute week stats
     trades = len(week_rows)
     wins = sum(1 for r in week_rows
@@ -765,5 +773,4 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
         "best_pnl": by_interval.get(best_interval, 0),
         "worst_interval": worst_interval,
         "worst_pnl": by_interval.get(worst_interval, 0),
-        "cumulative_total": cumulative_total,
     }
