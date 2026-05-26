@@ -548,8 +548,9 @@ def main():
                     except Exception as se:
                         logger.error("Settlement error: %s", se, exc_info=True)
 
-                # Weekly summary: last trading day after 17:00
+                # Weekly summary: Friday only, after 17:00
                 if (ok
+                        and now.weekday() == 4  # Friday
                         and now.time() >= WEEKLY_SUMMARY
                         and is_last_cycle(now)
                         and weekly_summary_week != current_week):

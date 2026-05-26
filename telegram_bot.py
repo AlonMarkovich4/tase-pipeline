@@ -191,32 +191,21 @@ def alert_daily_summary(date_str: str, cycles: int,
 # ------------------------------------------------------------------
 
 def alert_weekly_summary(week_stats: dict):
-    """Friday end-of-week P&L summary."""
-    total_pnl = week_stats.get("total_pnl", 0)
+    """Friday end-of-week summary."""
     trades = week_stats.get("trades", 0)
     wins = week_stats.get("wins", 0)
     losses = trades - wins
     wr = (wins / trades * 100) if trades > 0 else 0
     best_interval = week_stats.get("best_interval", 0)
-    best_pnl = week_stats.get("best_pnl", 0)
     worst_interval = week_stats.get("worst_interval", 0)
-    worst_pnl = week_stats.get("worst_pnl", 0)
-    cum_total = week_stats.get("cumulative_total", 0)
-
-    pnl_emoji = "\U0001F4C8" if total_pnl >= 0 else "\U0001F4C9"
 
     text = (
         f"\U0001F4CA *סיכום שבועי — TA-35*\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"{pnl_emoji} P&L: `{total_pnl:+,.0f} ₪`\n"
         f"\U0001F3AF הצלחה: `{wr:.0f}%`"
         f" ({wins}W/{losses}L"
         f" מתוך {trades})\n\n"
-        f"\U0001F3C6 מרווח מוביל: {best_interval}%"
-        f" (`{best_pnl:+,.0f} ₪`)\n"
+        f"\U0001F3C6 מרווח מוביל: {best_interval}%\n"
         f"\U0001F480 מרווח חלש: {worst_interval}%"
-        f" (`{worst_pnl:+,.0f} ₪`)\n\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"\U0001F4B0 *מצטבר:* `{cum_total:+,.0f} ₪`"
     )
     send_message(text)
