@@ -77,8 +77,8 @@ def _read_live_data() -> list:
     return []
 
 
-def _fetch_index_from_yahoo() -> float:
-    """Fetch TA-35 live index value from Yahoo Finance API."""
+def _fetch_yahoo_meta() -> dict:
+    """Fetch TA-35 meta from Yahoo Finance (price, open, etc.)."""
     url = ("https://query1.finance.yahoo.com/v8/finance/chart/TA35.TA"
            "?interval=1d&range=1d")
     try:
@@ -90,12 +90,39 @@ def _fetch_index_from_yahoo() -> float:
             meta = (data.get("chart", {})
                         .get("result", [{}])[0]
                         .get("meta", {}))
-            price = meta.get("regularMarketPrice", 0)
-            if price and price > 0:
-                logger.info("TA-35 index from Yahoo Finance: %.2f", price)
-                return float(price)
+            return meta
     except Exception as e:
         logger.warning("Yahoo Finance fetch failed: %s", e)
+    return {}
+
+
+def _fetch_index_from_yahoo() -> float:
+    """Fetch TA-35 live index value from Yahoo Finance API."""
+    meta = _fetch_yahoo_meta()
+    price = meta.get("regularMarketPrice", 0)
+    if price and price > 0:
+        logger.info("TA-35 index from Yahoo Finance: %.2f", price)
+        return float(price)
+    return 0.0
+
+
+def _fetch_settlement_price() -> float:
+    """
+    Fetch TA-35 opening price for settlement.
+    TASE options settle on the opening price of expiry day.
+    Yahoo Finance 'regularMarketOpen' is the closest available proxy.
+    """
+    meta = _fetch_yahoo_meta()
+    # Prefer opening price (settlement proxy)
+    open_price = meta.get("regularMarketOpen", 0)
+    if open_price and open_price > 0:
+        logger.info("Settlement price (Yahoo open): %.2f", open_price)
+        return float(open_price)
+    # Fallback to current price
+    price = meta.get("regularMarketPrice", 0)
+    if price and price > 0:
+        logger.warning("Settlement fallback to market price: %.2f", price)
+        return float(price)
     return 0.0
 
 
@@ -388,18 +415,18 @@ def settle_expiry(expiry_date_iso: str):
     logger.info("=" * 50)
     logger.info("SETTLEMENT ENGINE — %s", expiry_date_iso)
 
-    # 1. Get current index value from live data
-    rows = _read_live_data()
-    if not rows:
-        logger.error("Settlement: no live data — aborting")
-        return False
-
-    index_close = _get_base_index(rows)
+    # 1. Get settlement price (opening price of expiry day)
+    index_close = _fetch_settlement_price()
     if index_close <= 0:
-        logger.error("Settlement: could not get index close — aborting")
+        # Fallback: try from live data
+        rows = _read_live_data()
+        if rows:
+            index_close = _get_base_index(rows)
+    if index_close <= 0:
+        logger.error("Settlement: could not get settlement price — aborting")
         return False
 
-    logger.info("Index close: %.2f", index_close)
+    logger.info("Settlement price: %.2f", index_close)
 
     # 2. Read all strategies for this expiry date
     url = (
