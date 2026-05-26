@@ -277,14 +277,27 @@ def backup_to_storage() -> bool:
     success = 0
 
     for table in tables:
-        # 1. Read all rows
+        # 1. Read all rows with pagination
+        rows = []
+        batch_sz = 1000
+        offset = 0
         try:
-            url = f"{_base_url}/rest/v1/{table}?select=*&order=id"
-            r = httpx.get(url, headers=_headers(), timeout=30)
-            if r.status_code not in (200, 206):
-                logger.warning("Backup read %s: HTTP %d", table, r.status_code)
-                continue
-            rows = r.json()
+            while True:
+                url = (f"{_base_url}/rest/v1/{table}"
+                       f"?select=*&order=id"
+                       f"&limit={batch_sz}&offset={offset}")
+                r = httpx.get(url, headers=_headers(), timeout=30)
+                if r.status_code not in (200, 206):
+                    logger.warning("Backup read %s: HTTP %d",
+                                   table, r.status_code)
+                    break
+                chunk = r.json()
+                if not chunk:
+                    break
+                rows.extend(chunk)
+                if len(chunk) < batch_sz:
+                    break
+                offset += batch_sz
         except Exception as e:
             logger.warning("Backup read %s error: %s", table, e)
             continue

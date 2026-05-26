@@ -452,6 +452,7 @@ def main():
     settled_today = None             # track which date we settled
     weekly_summary_week = None       # track which week got summary
     daily_summary_date = None        # track which date got daily summary
+    current_day = None               # track current day for counter resets
     consecutive_failures = 0         # crash detection counter
     daily_cycles = 0                 # cycles completed today
     daily_rows = 0                   # rows collected today
@@ -478,11 +479,12 @@ def main():
 
             # Reset daily counters on new day
             today_iso = now.strftime("%Y-%m-%d")
-            if daily_summary_date != today_iso and daily_summary_date is not None:
+            if current_day != today_iso:
                 daily_cycles = 0
                 daily_rows = 0
                 daily_errors = 0
                 daily_expiries = 0
+                current_day = today_iso
 
             # periodic browser restart
             if time.monotonic() - browser_born > BROWSER_RESTART:

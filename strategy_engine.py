@@ -65,16 +65,34 @@ def _clean_numeric(val) -> float:
 
 
 def _read_live_data() -> list:
-    """Read all rows from tase_putcall (live table)."""
-    url = f"{_base_url}/rest/v1/tase_putcall?select=*"
-    try:
-        r = httpx.get(url, headers=_headers(), timeout=30)
-        if r.status_code in (200, 206):
-            return r.json()
-        logger.error("Strategy: read live data failed: %d", r.status_code)
-    except Exception as e:
-        logger.error("Strategy: read live data error: %s", e)
-    return []
+    """Read all rows from tase_putcall (live table) with pagination."""
+    all_rows = []
+    batch = 1000
+    offset = 0
+
+    while True:
+        url = (f"{_base_url}/rest/v1/tase_putcall"
+               f"?select=*&order=id&limit={batch}&offset={offset}")
+        try:
+            h = _headers()
+            h["Range-Unit"] = "items"
+            r = httpx.get(url, headers=h, timeout=30)
+            if r.status_code not in (200, 206):
+                logger.error("Strategy: read live data failed: %d",
+                             r.status_code)
+                break
+            rows = r.json()
+            if not rows:
+                break
+            all_rows.extend(rows)
+            if len(rows) < batch:
+                break
+            offset += batch
+        except Exception as e:
+            logger.error("Strategy: read live data error: %s", e)
+            break
+
+    return all_rows
 
 
 def _fetch_yahoo_meta() -> dict:
@@ -186,11 +204,15 @@ def _get_base_index(rows: list) -> float:
 def _find_closest_option(rows: list, target_strike: float,
                          side: str) -> dict:
     """
-    Find the option closest to target_strike.
+    Find the option closest to target_strike that has an actual
+    trading price (lastrate > 0).  Falls back to closest without
+    price only if no priced option exists.
     side: 'call' or 'put'
     """
-    best = None
-    best_diff = float("inf")
+    best_priced = None
+    best_priced_diff = float("inf")
+    best_any = None
+    best_any_diff = float("inf")
 
     strike_col = f"expirationprice_{side}"
     price_col  = f"lastrate_{side}"
@@ -201,17 +223,36 @@ def _find_closest_option(rows: list, target_strike: float,
         strike = _clean_numeric(row.get(strike_col))
         if strike <= 0:
             continue
+        price = _clean_numeric(row.get(price_col))
         diff = abs(strike - target_strike)
-        if diff < best_diff:
-            best_diff = diff
-            best = {
+
+        # Track closest with a real price
+        if price > 0 and diff < best_priced_diff:
+            best_priced_diff = diff
+            best_priced = {
                 "strike":  strike,
-                "price":   _clean_numeric(row.get(price_col)),
+                "price":   price,
                 "delta":   _clean_numeric(row.get(delta_col)),
                 "id":      row.get(id_col, ""),
             }
 
-    return best or {"strike": target_strike, "price": 0, "delta": 0, "id": ""}
+        # Track closest regardless (fallback)
+        if diff < best_any_diff:
+            best_any_diff = diff
+            best_any = {
+                "strike":  strike,
+                "price":   price,
+                "delta":   _clean_numeric(row.get(delta_col)),
+                "id":      row.get(id_col, ""),
+            }
+
+    if best_priced:
+        return best_priced
+    if best_any:
+        logger.warning("No priced %s option near strike %.0f — "
+                       "using unpriced (lastrate=0)", side, target_strike)
+        return best_any
+    return {"strike": target_strike, "price": 0, "delta": 0, "id": ""}
 
 
 def _calculate_condor(base_index: float, interval_pct: float,
@@ -514,6 +555,10 @@ def settle_expiry(expiry_date_iso: str):
 
         pnl_ils = round(pnl_points * TASE_MULTIPLIER, 2)
 
+        # Store in memory for fallback Telegram report
+        s["_settled_pnl_ils"] = pnl_ils
+        s["_settled_status"] = status
+
         # 4. Update row in Supabase
         patch_url = f"{update_url}?id=eq.{s['id']}"
         patch_data = {
@@ -556,22 +601,13 @@ def settle_expiry(expiry_date_iso: str):
         }
         day_name = day_he.get(exp_weekday, "")
 
-        # Build results list for telegram
+        # Re-read updated rows from DB (they now have actual_pnl_ils)
         report = []
-        for s in strategies:
-            report.append({
-                "interval_pct":     _clean_numeric(s.get("interval_pct")),
-                "short_put_strike": _clean_numeric(s.get("short_put_strike")),
-                "short_call_strike": _clean_numeric(s.get("short_call_strike")),
-                "actual_pnl_ils":   _clean_numeric(s.get("actual_pnl_ils", 0)),
-                "result_status":    s.get("result_status", ""),
-            })
-        # Re-read updated rows to get actual_pnl_ils
         try:
             read_url = (
                 f"{_base_url}/rest/v1/iron_condor_strategies"
                 f"?expiry_date=eq.{expiry_date_iso}"
-                f"&result_status=neq.null"
+                f"&result_status=not.is.null"
                 f"&select=interval_pct,short_put_strike,short_call_strike,"
                 f"actual_pnl_ils,result_status"
                 f"&order=interval_pct"
@@ -581,6 +617,19 @@ def settle_expiry(expiry_date_iso: str):
                 report = rr.json()
         except Exception:
             pass
+
+        # Fallback: build report from in-memory patch_data
+        # (strategies list was updated during the loop above)
+        if not report:
+            logger.warning("Settlement: re-read failed — using in-memory data")
+            for s in strategies:
+                report.append({
+                    "interval_pct":     _clean_numeric(s.get("interval_pct")),
+                    "short_put_strike": _clean_numeric(s.get("short_put_strike")),
+                    "short_call_strike": _clean_numeric(s.get("short_call_strike")),
+                    "actual_pnl_ils":   _clean_numeric(s.get("_settled_pnl_ils", 0)),
+                    "result_status":    s.get("_settled_status", ""),
+                })
 
         # Get the base_index from when the strategy was entered
         entry_base = _clean_numeric(
@@ -601,10 +650,21 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
     """Gather stats for the given ISO week number for the weekly summary."""
     _init()
 
-    # Read all settled strategies
+    # Calculate the date range for this ISO week
+    if iso_year == 0:
+        iso_year = date.today().year
+    # ISO week 1 starts on the Monday of the week containing Jan 4
+    jan4 = date(iso_year, 1, 4)
+    week_start = jan4 - timedelta(days=jan4.weekday())  # Monday of week 1
+    week_start += timedelta(weeks=iso_week - 1)
+    week_end = week_start + timedelta(days=6)  # Sunday
+
+    # 1. Read this week's settled strategies (filtered by API)
     url = (
         f"{_base_url}/rest/v1/iron_condor_strategies"
         f"?result_status=not.is.null"
+        f"&trigger_date=gte.{week_start.isoformat()}"
+        f"&trigger_date=lte.{week_end.isoformat()}"
         f"&select=trigger_date,interval_pct,actual_pnl_ils,result_status"
         f"&order=trigger_date"
     )
@@ -613,30 +673,31 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
         if r.status_code not in (200, 206):
             logger.warning("get_weekly_stats: HTTP %d", r.status_code)
             return {}
-        rows = r.json()
+        week_rows = r.json()
     except Exception as e:
         logger.error("get_weekly_stats error: %s", e)
         return {}
 
-    if not rows:
-        return {}
-
-    # Filter to current week
-    week_rows = []
-    all_rows = []
-    for row in rows:
-        pnl = _clean_numeric(row.get("actual_pnl_ils", 0))
-        all_rows.append(pnl)
-        try:
-            d = date.fromisoformat(row["trigger_date"])
-            cal = d.isocalendar()
-            if cal[1] == iso_week and (iso_year == 0 or cal[0] == iso_year):
-                week_rows.append(row)
-        except (ValueError, KeyError):
-            continue
-
     if not week_rows:
         return {}
+
+    # 2. Read cumulative total (all time) — only the pnl column
+    cum_url = (
+        f"{_base_url}/rest/v1/iron_condor_strategies"
+        f"?result_status=not.is.null"
+        f"&select=actual_pnl_ils"
+        f"&limit=10000"
+    )
+    cumulative_total = 0
+    try:
+        rr = httpx.get(cum_url, headers=_headers(), timeout=15)
+        if rr.status_code in (200, 206):
+            cumulative_total = sum(
+                _clean_numeric(r.get("actual_pnl_ils", 0))
+                for r in rr.json()
+            )
+    except Exception:
+        pass
 
     # Compute week stats
     trades = len(week_rows)
@@ -654,9 +715,6 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
 
     best_interval = max(by_interval, key=by_interval.get) if by_interval else 0
     worst_interval = min(by_interval, key=by_interval.get) if by_interval else 0
-
-    # Cumulative total (all time)
-    cumulative_total = sum(all_rows)
 
     return {
         "trades": trades,
