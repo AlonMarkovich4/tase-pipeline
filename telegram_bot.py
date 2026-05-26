@@ -104,11 +104,13 @@ def alert_strategy_launch(base_index: float, strategies: list,
             sc = s["short_call_strike"]
             prem = s["total_net_premium"]
             profit = s["max_profit_ils"]
+            risk = s["max_risk_ils"]
             text += (
                 f"`{pct:>4.1f}%`"
                 f" | `{sp:.0f}`—`{sc:.0f}`"
-                f" | ₪`{prem:,.0f}`"
-                f" | +₪`{profit:,.0f}`\n"
+                f" | פרמיה `{prem:,.1f}` נק׳"
+                f" | +`{profit:,.0f}`₪"
+                f" / -`{risk:,.0f}`₪\n"
             )
 
     text += (
@@ -124,7 +126,12 @@ def alert_strategy_launch(base_index: float, strategies: list,
 def alert_settlement(day_name: str, settlement_index: float,
                      base_index: float, results: list):
     """Daily expiry settlement — shows P&L per interval."""
-    total_pnl = sum(r.get("actual_pnl_ils", 0) for r in results)
+    def _n(v):
+        try:
+            return float(v) if v is not None else 0
+        except (ValueError, TypeError):
+            return 0
+    total_pnl = sum(_n(r.get("actual_pnl_ils", 0)) for r in results)
     pnl_emoji = "\U0001F4C8" if total_pnl >= 0 else "\U0001F4C9"
 
     text = (
@@ -134,9 +141,9 @@ def alert_settlement(day_name: str, settlement_index: float,
         f" | כניסה: `{base_index:,.2f}`\n\n"
     )
 
-    for r in sorted(results, key=lambda x: x.get("interval_pct", 0)):
-        pct = r.get("interval_pct", 0)
-        pnl = r.get("actual_pnl_ils", 0)
+    for r in sorted(results, key=lambda x: _n(x.get("interval_pct", 0))):
+        pct = _n(r.get("interval_pct", 0))
+        pnl = _n(r.get("actual_pnl_ils", 0))
         status = r.get("result_status", "")
 
         icon = {
