@@ -276,15 +276,49 @@ def _calculate_condor(base_index: float, interval_pct: float,
     short_put  = _find_closest_option(rows_for_expiry, short_put_strike, "put")
     long_put   = _find_closest_option(rows_for_expiry, long_put_strike, "put")
 
+    # ------------------------------------------------------------------
+    # Validate strike order: LP < SP < SC < LC
+    # If matching produced invalid order, force correct spacing
+    # ------------------------------------------------------------------
+    if short_put["strike"] >= short_call["strike"]:
+        logger.warning(
+            "Invalid strike order: SP(%.0f) >= SC(%.0f) at %.1f%% — "
+            "forcing symmetric from base %.0f",
+            short_put["strike"], short_call["strike"],
+            interval_pct, base_index)
+        short_put["strike"] = base_index - offset
+        short_call["strike"] = base_index + offset
+
+    if long_put["strike"] >= short_put["strike"]:
+        long_put["strike"] = short_put["strike"] - WING_WIDTH
+
+    if long_call["strike"] <= short_call["strike"]:
+        long_call["strike"] = short_call["strike"] + WING_WIDTH
+
+    # Actual wing widths (may differ from WING_WIDTH after matching)
+    actual_wing_put  = short_put["strike"] - long_put["strike"]
+    actual_wing_call = long_call["strike"] - short_call["strike"]
+    actual_wing_max  = max(actual_wing_put, actual_wing_call)
+
     # Net premium
     total_net_premium = (
         (short_call["price"] + short_put["price"])
         - (long_call["price"] + long_put["price"])
     )
 
+    # Use actual wing width for risk calculation (not fixed WING_WIDTH)
     max_profit = total_net_premium * TASE_MULTIPLIER
-    max_risk   = (WING_WIDTH * TASE_MULTIPLIER) - max_profit
+    max_risk   = (actual_wing_max * TASE_MULTIPLIER) - max_profit
     rr_ratio   = round(max_risk / max_profit, 4) if max_profit > 0 else 0
+
+    # Flag negative premium (paying to enter — not a real trade)
+    premium_flag = ""
+    if total_net_premium < 0:
+        premium_flag = "negative_premium"
+        logger.info(
+            "   %.1f%% %s: negative premium %.2f — "
+            "this interval costs money to enter (not tradeable)",
+            interval_pct, expiry_date, total_net_premium)
 
     # Break-even points
     breakeven_upper = short_call["strike"] + total_net_premium
@@ -337,6 +371,9 @@ def _calculate_condor(base_index: float, interval_pct: float,
         "breakeven_lower":    round(breakeven_lower, 2),
         "days_to_expiry":     dte,
         "wing_width":         WING_WIDTH,
+        "actual_wing_put":    round(actual_wing_put, 2),
+        "actual_wing_call":   round(actual_wing_call, 2),
+        "premium_flag":       premium_flag,
     }
 
 
@@ -525,6 +562,10 @@ def settle_expiry(expiry_date_iso: str):
         long_call  = _clean_numeric(s.get("long_call_strike"))
         net_premium = _clean_numeric(s.get("total_net_premium"))
 
+        # Use actual wing widths from saved data (fall back to constant)
+        wing_put  = _clean_numeric(s.get("actual_wing_put")) or (short_put - long_put) or WING_WIDTH
+        wing_call = _clean_numeric(s.get("actual_wing_call")) or (long_call - short_call) or WING_WIDTH
+
         # Determine result
         if short_put <= index_close <= short_call:
             # Index inside short strikes — max profit
@@ -544,13 +585,13 @@ def settle_expiry(expiry_date_iso: str):
             status = "partial_loss_call"
 
         elif index_close < long_put:
-            # Index below long put — max loss
-            pnl_points = net_premium - WING_WIDTH
+            # Index below long put — max loss on put side
+            pnl_points = net_premium - wing_put
             status = "max_loss_put"
 
         else:
-            # Index above long call — max loss
-            pnl_points = net_premium - WING_WIDTH
+            # Index above long call — max loss on call side
+            pnl_points = net_premium - wing_call
             status = "max_loss_call"
 
         pnl_ils = round(pnl_points * TASE_MULTIPLIER, 2)
