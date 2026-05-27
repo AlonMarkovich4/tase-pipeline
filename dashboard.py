@@ -597,17 +597,26 @@ if n_active > 0 and live_index > 0:
 # ==================================================================
 # PER-EXPIRY BREAKDOWN
 # ==================================================================
-st.markdown('<div class="section-hdr">📝 פירוט לפי יום פקיעה</div>',
-            unsafe_allow_html=True)
+# ==================================================================
+# SPLIT INTO TABS: Active vs History
+# ==================================================================
+active_df = filtered[~filtered["_is_settled"]]
+history_df = filtered[filtered["_is_settled"]]
 
-for _, row in filtered.iterrows():
+tab_active, tab_history = st.tabs([
+    f"🔵 פוזיציות פתוחות ({len(active_df)})",
+    f"📜 היסטוריה ({len(history_df)})",
+])
+
+
+def render_expiry_card(row, container):
+    """Render a single expiry card (legs table, metrics, payoff chart)."""
     exp_date = row.get("expiry_date", "")
     exp_day = row.get("expiry_day_name", "")
     exp_day_he = DAY_HE.get(exp_day, exp_day)
     is_settled = row["_is_settled"]
     result_status = row.get("result_status", "")
 
-    # Build plain-text label for expander (no HTML — Streamlit doesn't render it)
     if is_settled:
         pnl = row.get("actual_pnl_ils", 0)
         pnl_icon = "✅" if pnl > 0 else "❌"
@@ -622,7 +631,7 @@ for _, row in filtered.iterrows():
         idx_label = f"מדד נוכחי: {fmt_num(live_index)}" if live_index > 0 else ""
 
     expander_label = f"📅 {exp_date} — יום {exp_day_he}  |  {badge_text}  |  {idx_label}"
-    with st.expander(expander_label, expanded=(len(filtered) <= 4)):
+    with container.expander(expander_label, expanded=True):
 
         # ── 4 Legs Table ──
         legs = [
@@ -798,6 +807,23 @@ for _, row in filtered.iterrows():
         )
 
         st.plotly_chart(fig, use_container_width=True)
+
+
+# ── Render Active tab ──
+with tab_active:
+    if active_df.empty:
+        st.info("אין פוזיציות פתוחות כרגע — כל האסטרטגיות פקעו.")
+    else:
+        for _, row in active_df.iterrows():
+            render_expiry_card(row, tab_active)
+
+# ── Render History tab ──
+with tab_history:
+    if history_df.empty:
+        st.info("אין היסטוריה — אף אסטרטגיה לא פקעה עדיין.")
+    else:
+        for _, row in history_df.iterrows():
+            render_expiry_card(row, tab_history)
 
 
 # ==================================================================
