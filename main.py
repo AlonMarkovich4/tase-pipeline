@@ -16,8 +16,6 @@ import threading
 import random
 from datetime import datetime, timedelta, date, time as dt_time
 from zoneinfo import ZoneInfo
-from pathlib import Path
-
 from playwright.sync_api import sync_playwright
 
 import database as db
@@ -105,7 +103,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
     """Minimal JSON health endpoint — GET / or GET /health."""
 
     def do_GET(self):
-        healthy = (_health_state["status"] == "running"
+        healthy = (_health_state["status"] in ("running", "sleeping")
                    and _health_state["consecutive_failures"] < 5)
         code = 200 if healthy else 503
         self.send_response(code)
@@ -256,7 +254,7 @@ def _get_expiry_dates(page, max_retries: int = 3) -> list:
         "DerivativeExpirationDateItems", []
     )
 
-    today = date.today()
+    today = datetime.now(TZ_ISRAEL).date()
     monday = today - timedelta(days=today.weekday())
     friday = monday + timedelta(days=4)
 
@@ -488,6 +486,13 @@ def main():
                     "Sleeping %d min...",
                     en, now.strftime("%H:%M"), wait // 60,
                 )
+                _health_state.update({
+                    "status": "sleeping",
+                    "last_cycle": _health_state.get("last_cycle"),
+                    "last_ok": _health_state.get("last_ok"),
+                    "consecutive_failures": 0,
+                    "cycles_today": daily_cycles,
+                })
                 shutdown.wait(timeout=wait)
                 continue
 
@@ -565,12 +570,16 @@ def main():
                         and now.time() >= SETTLEMENT_AFTER
                         and settled_today != today_iso):
                     try:
-                        logger.info("*** Checking settlement for expiry %s ***", today_iso)
-                        result = strategy_engine.settle_expiry(today_iso)
-                        if result:
-                            settled_today = today_iso
-                        # If False (no strategies or failed), don't mark —
-                        # allow retry if strategies are created later today
+                        # Quick check: do strategies exist for today's expiry?
+                        has_strategies = strategy_engine.has_unsettled_strategies(today_iso)
+                        if has_strategies:
+                            logger.info("*** Settling expiry %s ***", today_iso)
+                            result = strategy_engine.settle_expiry(today_iso)
+                            if result:
+                                settled_today = today_iso
+                        else:
+                            logger.info("No unsettled strategies for %s — skipping settlement", today_iso)
+                            settled_today = today_iso  # Don't retry today
                     except Exception as se:
                         logger.error("Settlement error: %s", se, exc_info=True)
 

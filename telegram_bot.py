@@ -131,8 +131,6 @@ def alert_settlement(day_name: str, settlement_index: float,
             return float(v) if v is not None else 0
         except (ValueError, TypeError):
             return 0
-    total_pnl = sum(_n(r.get("actual_pnl_ils", 0)) for r in results)
-    pnl_emoji = "\U0001F4C8" if total_pnl >= 0 else "\U0001F4C9"
 
     text = (
         f"\U0001F3C1 *פקיעה — יום {day_name}*\n"
@@ -156,9 +154,6 @@ def alert_settlement(day_name: str, settlement_index: float,
 
         text += f"{icon} `{pct:.1f}%` | `{pnl:+,.0f} ₪`\n"
 
-    text += (
-        f"\n{pnl_emoji} *סה\"כ:* `{total_pnl:+,.0f} ₪`"
-    )
     send_message(text)
 
 

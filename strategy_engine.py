@@ -156,12 +156,7 @@ def _get_base_index(rows: list) -> float:
     3. ATM delta inference (delta closest to 50)
     4. Strike range midpoint (last resort)
     """
-    # Method 1: Yahoo Finance API (primary source)
-    val = _fetch_index_from_yahoo()
-    if val > 0:
-        return val
-
-    # Method 2: explicit field from TASE API
+    # Method 1: TASE API field (most reliable — comes from the exchange)
     for row in rows:
         v = _clean_numeric(row.get("underlingasset_call"))
         if v > 0:
@@ -171,6 +166,11 @@ def _get_base_index(rows: list) -> float:
         if v > 0:
             logger.info("Base index from underlingasset_put: %.2f", v)
             return v
+
+    # Method 2: Yahoo Finance API (fallback if TASE field missing)
+    val = _fetch_index_from_yahoo()
+    if val > 0:
+        return val
 
     # Method 3: infer from ATM call (delta closest to 50)
     logger.info("Falling back to ATM delta inference")
@@ -411,6 +411,22 @@ def _strategies_exist_for_week(trigger_date: str) -> bool:
     return False
 
 
+def has_unsettled_strategies(expiry_date_iso: str) -> bool:
+    """Quick check: are there unsettled strategies for this expiry date?"""
+    _init()
+    url = (f"{_base_url}/rest/v1/iron_condor_strategies"
+           f"?expiry_date=eq.{expiry_date_iso}"
+           f"&result_status=is.null"
+           f"&select=id&limit=1")
+    try:
+        r = httpx.get(url, headers=_headers(), timeout=10)
+        if r.status_code in (200, 206):
+            return len(r.json()) > 0
+    except Exception:
+        pass
+    return False
+
+
 def _save_strategies(strategies: list) -> bool:
     """Save all strategy rows to Supabase with UPSERT."""
     url = (f"{_base_url}/rest/v1/iron_condor_strategies"
@@ -479,7 +495,6 @@ def run_strategy():
             expiry_groups.setdefault(exp, []).append(row)
 
     # 4. Filter only future expiry dates (Tue-Fri of this week)
-    today = date.today()
     future_expiries = sorted(
         e for e in expiry_groups if e > trigger_date
     )
@@ -719,7 +734,7 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
 
     # Calculate the date range for this ISO week
     if iso_year == 0:
-        iso_year = date.today().year
+        iso_year = datetime.now(TZ_ISRAEL).year
     # ISO week 1 starts on the Monday of the week containing Jan 4
     jan4 = date(iso_year, 1, 4)
     week_start = jan4 - timedelta(days=jan4.weekday())  # Monday of week 1
