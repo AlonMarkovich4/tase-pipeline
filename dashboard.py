@@ -22,6 +22,7 @@ st.set_page_config(
     page_title="TA-35 Strategy Desk",
     page_icon="◆",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
