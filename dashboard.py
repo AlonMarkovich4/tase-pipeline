@@ -349,32 +349,86 @@ def fmt_num(v: float, decimals: int = 2) -> str:
     return f"{v:,.{decimals}f}"
 
 
-def compute_unrealized_pnl(row: pd.Series, live_index: float) -> float:
-    """
-    Compute unrealized P&L for an active position based on
-    where the live index sits relative to the Iron Condor strikes.
-    Same logic as settlement engine.
-    """
-    sp = row.get("short_put_strike", 0)
-    sc = row.get("short_call_strike", 0)
-    lp = row.get("long_put_strike", 0)
-    lc = row.get("long_call_strike", 0)
-    net_prem = row.get("total_net_premium", 0)
-    wing_put = row.get("actual_wing_put", 0) or (sp - lp) or 20
-    wing_call = row.get("actual_wing_call", 0) or (lc - sc) or 20
+@st.cache_data(ttl=60)
+def _fetch_current_option_price(derivative_id: str, side: str) -> float:
+    """Fetch current lastrate for a specific option from tase_putcall."""
+    if not derivative_id or not SUPABASE_URL:
+        return 0.0
+    col_id = f"derivativeid_{side}"
+    col_price = f"lastrate_{side}"
+    url = (
+        f"{SUPABASE_URL}/rest/v1/tase_putcall"
+        f"?{col_id}=eq.{derivative_id}"
+        f"&select={col_price}"
+        f"&order=id.desc&limit=1"
+    )
+    try:
+        r = httpx.get(url, headers=_supabase_headers(), timeout=10)
+        if r.status_code in (200, 206):
+            rows = r.json()
+            if rows:
+                val = rows[0].get(col_price, 0)
+                if val is not None:
+                    try:
+                        return float(str(val).replace(",", ""))
+                    except (ValueError, TypeError):
+                        pass
+    except Exception:
+        pass
+    return 0.0
 
-    if sp <= live_index <= sc:
-        pnl_pts = net_prem
-    elif lp <= live_index < sp:
-        pnl_pts = net_prem - (sp - live_index)
-    elif sc < live_index <= lc:
-        pnl_pts = net_prem - (live_index - sc)
-    elif live_index < lp:
-        pnl_pts = net_prem - wing_put
+
+def compute_unrealized_pnl(row: pd.Series, live_index: float) -> tuple:
+    """
+    Compute real unrealized P&L based on current option prices.
+
+    Real P&L = (entry_premium - current_premium) × MULTIPLIER
+    Where:
+      entry_premium   = what we received when selling the condor
+      current_premium = what it would cost to close now
+
+    Returns (pnl_ils, method) where method is "live" or "expiry_proxy".
+    """
+    entry_premium = row.get("total_net_premium", 0)
+
+    # Try to get current prices for all 4 legs
+    sc_id = str(row.get("short_call_id", ""))
+    sp_id = str(row.get("short_put_id", ""))
+    lc_id = str(row.get("long_call_id", ""))
+    lp_id = str(row.get("long_put_id", ""))
+
+    sc_now = _fetch_current_option_price(sc_id, "call") if sc_id else 0
+    sp_now = _fetch_current_option_price(sp_id, "put") if sp_id else 0
+    lc_now = _fetch_current_option_price(lc_id, "call") if lc_id else 0
+    lp_now = _fetch_current_option_price(lp_id, "put") if lp_id else 0
+
+    # If we got at least the short legs priced, compute real P&L
+    if sc_now > 0 or sp_now > 0:
+        current_premium = (sc_now + sp_now) - (lc_now + lp_now)
+        # We sold at entry_premium, buying back at current_premium
+        pnl_pts = entry_premium - current_premium
+        return round(pnl_pts * MULTIPLIER, 2), "live"
+
+    # Fallback: expiry-proxy (same as before)
+    sp_strike = row.get("short_put_strike", 0)
+    sc_strike = row.get("short_call_strike", 0)
+    lp_strike = row.get("long_put_strike", 0)
+    lc_strike = row.get("long_call_strike", 0)
+    wing_put = row.get("actual_wing_put", 0) or (sp_strike - lp_strike) or 20
+    wing_call = row.get("actual_wing_call", 0) or (lc_strike - sc_strike) or 20
+
+    if sp_strike <= live_index <= sc_strike:
+        pnl_pts = entry_premium
+    elif lp_strike <= live_index < sp_strike:
+        pnl_pts = entry_premium - (sp_strike - live_index)
+    elif sc_strike < live_index <= lc_strike:
+        pnl_pts = entry_premium - (live_index - sc_strike)
+    elif live_index < lp_strike:
+        pnl_pts = entry_premium - wing_put
     else:
-        pnl_pts = net_prem - wing_call
+        pnl_pts = entry_premium - wing_call
 
-    return round(pnl_pts * MULTIPLIER, 2)
+    return round(pnl_pts * MULTIPLIER, 2), "expiry_proxy"
 
 
 def build_payoff_curve(row: pd.Series) -> tuple:
@@ -503,9 +557,13 @@ settled_pnl = filtered.loc[filtered["_is_settled"], "actual_pnl_ils"].sum()
 
 # Unrealized P&L for active strategies
 unrealized_pnl = 0.0
+pnl_method = "live"
 if n_active > 0 and live_index > 0:
     for _, row in filtered[~filtered["_is_settled"]].iterrows():
-        unrealized_pnl += compute_unrealized_pnl(row, live_index)
+        pnl_val, method = compute_unrealized_pnl(row, live_index)
+        unrealized_pnl += pnl_val
+        if method == "expiry_proxy":
+            pnl_method = "expiry_proxy"
 
 total_pnl = settled_pnl + unrealized_pnl
 
@@ -561,7 +619,8 @@ else:
     display_pnl = total_pnl
     pnl_class = "profit" if display_pnl >= 0 else "loss"
     glow_class = "glow-profit" if display_pnl >= 0 else "glow-loss"
-    pnl_title = "📈 רווח/הפסד צף (Unrealized P&L)"
+    method_label = "לפי מחירי שוק" if pnl_method == "live" else "הערכה לפי מדד"
+    pnl_title = f"📈 רווח/הפסד צף ({method_label})"
     pnl_value = fmt_ils(display_pnl)
 
 st.markdown(f"""
@@ -624,7 +683,7 @@ def render_expiry_card(row, container):
         idx_label = f"מדד פקיעה: {fmt_num(row.get('actual_index_close', 0))}"
     else:
         if live_index > 0:
-            u_pnl = compute_unrealized_pnl(row, live_index)
+            u_pnl, _ = compute_unrealized_pnl(row, live_index)
             badge_text = f"🔵 צף: {fmt_ils(u_pnl)}"
         else:
             badge_text = "🔵 פתוח"
