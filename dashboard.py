@@ -68,6 +68,10 @@ html, body, [class*="css"] {{
 #MainMenu, footer, header {{ visibility: hidden; }}
 .stDeployButton {{ display: none; }}
 
+/* ── Lock sidebar open ── */
+[data-testid="collapsedControl"] {{ display: none !important; }}
+section[data-testid="stSidebar"] {{ min-width: 280px !important; }}
+
 /* ── Header ── */
 .dash-header {{
     text-align: center;
