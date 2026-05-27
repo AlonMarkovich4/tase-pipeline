@@ -19,7 +19,7 @@ _api_key:       str = ""
 _table:         str = "tase_putcall"
 _history_table: str = "tase_putcall_history"
 
-BATCH_SIZE = 50  # rows per POST request
+from config import TZ_ISRAEL, BATCH_SIZE
 
 # Columns that exist in the Supabase table (all lowercase)
 VALID_COLUMNS = {
@@ -284,10 +284,8 @@ def backup_to_storage() -> bool:
     _ensure_init()
     import csv
     import io
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
-    today = datetime.now(ZoneInfo("Asia/Jerusalem")).strftime("%Y-%m-%d")
+    from datetime import datetime as _dt
+    today = _dt.now(TZ_ISRAEL).strftime("%Y-%m-%d")
     tables = [_history_table, "iron_condor_strategies"]
     success = 0
 

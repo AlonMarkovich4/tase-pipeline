@@ -14,22 +14,15 @@ import os
 import json
 import logging
 from datetime import datetime, date, timedelta
-from zoneinfo import ZoneInfo
 
 import httpx
 import telegram_bot
+from config import (
+    TZ_ISRAEL, TASE_MULTIPLIER, WING_WIDTH, INTERVALS,
+    DAY_NAMES_EN, DAY_NAMES_HE,
+)
 
 logger = logging.getLogger("tase_pipeline")
-
-TZ_ISRAEL = ZoneInfo("Asia/Jerusalem")
-TASE_MULTIPLIER = 50
-WING_WIDTH = 20
-INTERVALS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
-
-DAY_NAMES = {
-    0: "Monday", 1: "Tuesday", 2: "Wednesday",
-    3: "Thursday", 4: "Friday",
-}
 
 _base_url: str = ""
 _api_key:  str = ""
@@ -351,7 +344,7 @@ def _calculate_condor(base_index: float, interval_pct: float,
         "trigger_time":       trigger_time,
         "base_index_value":   round(base_index, 2),
         "expiry_date":        expiry_date,
-        "expiry_day_name":    DAY_NAMES.get(exp_weekday, ""),
+        "expiry_day_name":    DAY_NAMES_EN.get(exp_weekday, ""),
         "interval_pct":       interval_pct,
 
         "short_call_strike":  round(short_call["strike"], 2),
@@ -677,11 +670,7 @@ def settle_expiry(expiry_date_iso: str):
     # Send Telegram settlement report
     if settled > 0:
         exp_weekday = date.fromisoformat(expiry_date_iso).weekday()
-        day_he = {
-            0: "שני", 1: "שלישי", 2: "רביעי",
-            3: "חמישי", 4: "שישי",
-        }
-        day_name = day_he.get(exp_weekday, "")
+        day_name = DAY_NAMES_HE.get(exp_weekday, "")
 
         # Re-read updated rows from DB (they now have actual_pnl_ils)
         report = []

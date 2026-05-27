@@ -14,26 +14,29 @@ import logging
 import time
 import threading
 import random
-from datetime import datetime, timedelta, date, time as dt_time
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, date
 from playwright.sync_api import sync_playwright
 
 import database as db
 import strategy_engine
 import telegram_bot
+from config import (
+    TZ_ISRAEL, TRADING_DAYS, MARKET_OPEN, MARKET_CLOSE, DAY_NAMES,
+    STRATEGY_WINDOW_OPEN, STRATEGY_WINDOW_CLOSE,
+    SETTLEMENT_AFTER, WEEKLY_SUMMARY_TIME,
+    BROWSER_RESTART_SECONDS, FETCH_INTERVAL_MINUTES,
+)
 
 # ------------------------------------------------------------------
-# Config
+# Config (local to pipeline)
 # ------------------------------------------------------------------
 HEADLESS        = True
-FETCH_INTERVAL  = int(os.environ.get("FETCH_INTERVAL_MINUTES", "15")) * 60
+FETCH_INTERVAL  = int(os.environ.get("FETCH_INTERVAL_MINUTES",
+                                      str(FETCH_INTERVAL_MINUTES))) * 60
 PAGE_TIMEOUT    = 45_000
 RENDER_WAIT     = 6
-BROWSER_RESTART = 6 * 3600  # restart browser every 6h
-STRATEGY_WINDOW_OPEN  = dt_time(12, 0)  # Strategy trigger window start
-STRATEGY_WINDOW_CLOSE = dt_time(13, 0)  # Strategy trigger window end
-SETTLEMENT_AFTER  = dt_time(10, 0)  # Settlement after opening price
-WEEKLY_SUMMARY    = dt_time(17, 0)  # Weekly summary on last trading day
+BROWSER_RESTART = BROWSER_RESTART_SECONDS
+WEEKLY_SUMMARY  = WEEKLY_SUMMARY_TIME
 
 API_URL    = "https://api.tase.co.il/api/derivatives/putvscall"
 EXPIRY_URL = "https://api.tase.co.il/api/derivatives/fltrputvscallexpdates"
@@ -42,23 +45,6 @@ TASE_PAGE  = (
     "major_data/putvscall"
     "?dType=2&updType=1&inQType=3&objId=01&qType=3"
 )
-
-TZ_ISRAEL = ZoneInfo("Asia/Jerusalem")
-
-# Mon-Fri trading (Mon=0 .. Fri=4)
-TRADING_DAYS  = {0, 1, 2, 3, 4}
-MARKET_OPEN   = dt_time(9, 30)
-MARKET_CLOSE  = dt_time(17, 30)
-
-DAY_NAMES = {
-    0: ("Monday",    "שני"),
-    1: ("Tuesday",   "שלישי"),
-    2: ("Wednesday", "רביעי"),
-    3: ("Thursday",  "חמישי"),
-    4: ("Friday",    "שישי"),
-    5: ("Saturday",  "שבת"),
-    6: ("Sunday",    "ראשון"),
-}
 
 # ------------------------------------------------------------------
 # Logging  (stdout only — Render captures it automatically)
@@ -416,6 +402,20 @@ def run_cycle(page, cycle_time: datetime):
                     item["UnderlingAsset_Put"] = underlying
 
         if items:
+            # Sanity checks — warn on suspicious data
+            bad = 0
+            for item in items:
+                sc = item.get("ExpirationPrice_Call")
+                sp = item.get("ExpirationPrice_Put")
+                if sc is not None and (not isinstance(sc, (int, float)) or sc <= 0):
+                    bad += 1
+                if sp is not None and (not isinstance(sp, (int, float)) or sp <= 0):
+                    bad += 1
+            if bad:
+                logger.warning("   ⚠ %d items with invalid strike prices", bad)
+            if len(items) > 500:
+                logger.warning("   ⚠ Unusually large response: %d items", len(items))
+
             if db.upsert_items(date_str, time_str, exp_iso,
                                trade_dt, items):
                 success_count += 1
