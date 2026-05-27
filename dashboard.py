@@ -56,7 +56,6 @@ st.markdown(f"""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 html, body, [class*="css"] {{
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
-    direction: rtl;
 }}
 .main .block-container {{
     padding: 1rem 2rem 2rem !important;
@@ -613,25 +612,22 @@ for _, row in filtered.iterrows():
     is_settled = row["_is_settled"]
     result_status = row.get("result_status", "")
 
-    # Build status badge for this expiry
+    # Build plain-text label for expander (no HTML — Streamlit doesn't render it)
     if is_settled:
         pnl = row.get("actual_pnl_ils", 0)
-        if pnl > 0:
-            badge = f'<span class="badge settled">✅ {fmt_ils(pnl)}</span>'
-        else:
-            badge = f'<span class="badge loss">❌ {fmt_ils(pnl)}</span>'
+        pnl_icon = "✅" if pnl > 0 else "❌"
+        badge_text = f"{pnl_icon} {fmt_ils(pnl)}"
         idx_label = f"מדד פקיעה: {fmt_num(row.get('actual_index_close', 0))}"
     else:
         if live_index > 0:
             u_pnl = compute_unrealized_pnl(row, live_index)
-            badge_cls = "active"
-            badge = f'<span class="badge {badge_cls}">🔵 צף: {fmt_ils(u_pnl)}</span>'
+            badge_text = f"🔵 צף: {fmt_ils(u_pnl)}"
         else:
-            badge = '<span class="badge active">🔵 פתוח</span>'
+            badge_text = "🔵 פתוח"
         idx_label = f"מדד נוכחי: {fmt_num(live_index)}" if live_index > 0 else ""
 
-    with st.expander(f"📅 {exp_date} — יום {exp_day_he}  |  {badge}  |  {idx_label}",
-                     expanded=(len(filtered) <= 4)):
+    expander_label = f"📅 {exp_date} — יום {exp_day_he}  |  {badge_text}  |  {idx_label}"
+    with st.expander(expander_label, expanded=(len(filtered) <= 4)):
 
         # ── 4 Legs Table ──
         legs = [
@@ -649,7 +645,8 @@ for _, row in filtered.iterrows():
              row.get("long_call_id", "")),
         ]
 
-        legs_html = """
+        legs_html = '<div dir="ltr">'
+        legs_html += """
         <table class="legs-table">
         <thead><tr>
             <th>Leg</th><th>Action</th><th>Strike</th>
@@ -658,17 +655,17 @@ for _, row in filtered.iterrows():
         """
         for name, action, strike, price, delta, opt_id in legs:
             css = "sell" if action == "SELL" else "buy"
-            legs_html += f"""
-            <tr>
-                <td>{name}</td>
-                <td class="{css}">{action}</td>
-                <td><strong>{fmt_num(strike, 0)}</strong></td>
-                <td>{fmt_num(price)}</td>
-                <td>{fmt_num(delta, 4)}</td>
-                <td style="color:{C_DIM};font-size:11px">{opt_id}</td>
-            </tr>
-            """
-        legs_html += "</tbody></table>"
+            legs_html += (
+                f'<tr>'
+                f'<td>{name}</td>'
+                f'<td class="{css}">{action}</td>'
+                f'<td><strong>{fmt_num(strike, 0)}</strong></td>'
+                f'<td>{fmt_num(price)}</td>'
+                f'<td>{fmt_num(delta, 4)}</td>'
+                f'<td style="color:{C_DIM};font-size:11px">{opt_id}</td>'
+                f'</tr>'
+            )
+        legs_html += "</tbody></table></div>"
         st.markdown(legs_html, unsafe_allow_html=True)
 
         # ── Key metrics for this expiry ──
@@ -859,7 +856,7 @@ if not week_df.empty:
 
     # Build summary table
     summary_html = """
-    <table class="legs-table">
+    <div dir="ltr"><table class="legs-table">
     <thead><tr>
         <th>Interval</th><th>Expiries</th><th>Settled</th>
         <th>Wins</th><th>P&L (₪)</th><th>Avg Premium</th>
@@ -896,7 +893,7 @@ if not week_df.empty:
         <td></td>
     </tr>
     """
-    summary_html += "</tbody></table>"
+    summary_html += "</tbody></table></div>"
     st.markdown(summary_html, unsafe_allow_html=True)
 
 
