@@ -606,29 +606,73 @@ st.markdown(f"""
 
 
 # ==================================================================
-# P&L HERO CARD
+# P&L BREAKDOWN BY INTERVAL
 # ==================================================================
-if n_active == 0:
-    # All settled — show final P&L
-    pnl_class = "profit" if settled_pnl >= 0 else "loss"
-    glow_class = "glow-profit" if settled_pnl >= 0 else "glow-loss"
-    pnl_title = "💰 רווח/הפסד סופי — כל הפקיעות"
-    pnl_value = fmt_ils(settled_pnl)
-else:
-    # Has active positions — show unrealized
-    display_pnl = total_pnl
-    pnl_class = "profit" if display_pnl >= 0 else "loss"
-    glow_class = "glow-profit" if display_pnl >= 0 else "glow-loss"
-    method_label = "לפי מחירי שוק" if pnl_method == "live" else "הערכה לפי מדד"
-    pnl_title = f"📈 רווח/הפסד צף ({method_label})"
-    pnl_value = fmt_ils(display_pnl)
+week_all = df[df["_week_label"] == selected_week].copy()
 
-st.markdown(f"""
-<div class="pnl-hero {glow_class}">
-    <div class="title">{pnl_title}</div>
-    <div class="amount {pnl_class}">{pnl_value}</div>
-</div>
-""", unsafe_allow_html=True)
+# Compute P&L per interval
+interval_pnl_rows = []
+for pct in sorted(week_all["interval_pct"].unique()):
+    idf = week_all[week_all["interval_pct"] == pct]
+    settled_sum = idf.loc[idf["_is_settled"], "actual_pnl_ils"].sum()
+    unrealized_sum = 0.0
+    method = "live"
+    for _, r in idf[~idf["_is_settled"]].iterrows():
+        if live_index > 0:
+            val, m = compute_unrealized_pnl(r, live_index)
+            unrealized_sum += val
+            if m == "expiry_proxy":
+                method = "expiry_proxy"
+    total = settled_sum + unrealized_sum
+    n_s = int(idf["_is_settled"].sum())
+    n_a = len(idf) - n_s
+    interval_pnl_rows.append({
+        "pct": pct, "settled_pnl": settled_sum,
+        "unrealized_pnl": unrealized_sum, "total_pnl": total,
+        "n_settled": n_s, "n_active": n_a, "method": method,
+    })
+
+# Build compact P&L table for all intervals
+pnl_table = (
+    '<div dir="ltr"><table class="legs-table">'
+    '<thead><tr>'
+    '<th>מרווח</th><th>פקיעות</th>'
+    '<th>P&L מומש</th><th>P&L צף</th><th>סה"כ</th>'
+    '</tr></thead><tbody>'
+)
+grand_total = 0.0
+for ip in interval_pnl_rows:
+    pct = ip["pct"]
+    total = ip["total_pnl"]
+    grand_total += total
+    t_css = "buy" if total > 0 else ("sell" if total < 0 else "")
+    s_css = "buy" if ip["settled_pnl"] > 0 else ("sell" if ip["settled_pnl"] < 0 else "")
+    u_css = "buy" if ip["unrealized_pnl"] > 0 else ("sell" if ip["unrealized_pnl"] < 0 else "")
+    highlight = ' style="background:rgba(0,176,255,0.08)"' if pct == selected_interval else ""
+    status = f'{ip["n_settled"]}✅ {ip["n_active"]}🔵' if ip["n_active"] > 0 else f'{ip["n_settled"]}✅'
+    pnl_table += (
+        f'<tr{highlight}>'
+        f'<td><strong>{pct:.1f}%</strong></td>'
+        f'<td>{status}</td>'
+        f'<td class="{s_css}">{fmt_ils(ip["settled_pnl"])}</td>'
+        f'<td class="{u_css}">{fmt_ils(ip["unrealized_pnl"])}</td>'
+        f'<td class="{t_css}"><strong>{fmt_ils(total)}</strong></td>'
+        f'</tr>'
+    )
+
+# Grand total row
+gt_css = "buy" if grand_total > 0 else ("sell" if grand_total < 0 else "")
+pnl_table += (
+    f'<tr style="border-top:2px solid {C_BORDER};font-weight:700">'
+    f'<td>סה"כ</td><td></td><td></td><td></td>'
+    f'<td class="{gt_css}"><strong>{fmt_ils(grand_total)}</strong></td>'
+    f'</tr>'
+)
+pnl_table += '</tbody></table></div>'
+
+st.markdown('<div class="section-hdr">💰 P&L לפי מרווח — שבוע נבחר</div>',
+            unsafe_allow_html=True)
+st.markdown(pnl_table, unsafe_allow_html=True)
 
 
 # ==================================================================
