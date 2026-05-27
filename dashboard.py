@@ -29,19 +29,17 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 TZ = ZoneInfo("Asia/Jerusalem")
 MULTIPLIER = 50
 
-# Palette
+# Palette — high-contrast dark theme
 C_BG       = "#0B0D10"
 C_CARD     = "#151921"
 C_BORDER   = "#1E2433"
 C_TEXT     = "#E8EAED"
-C_DIM      = "#6B7B8D"
+C_DIM      = "#9AA0A6"        # ← boosted from #6B7B8D for accessibility
 C_GREEN    = "#00E676"
 C_RED      = "#FF1744"
 C_BLUE     = "#00B0FF"
 C_YELLOW   = "#FFD600"
-C_GRID     = "#1A1F2B"
-C_PROFIT   = "#00E676"
-C_LOSS     = "#FF1744"
+C_ORANGE   = "#FF9800"
 
 DAY_HE = {
     "Monday": "שני", "Tuesday": "שלישי", "Wednesday": "רביעי",
@@ -96,7 +94,7 @@ html, body, [class*="css"] {{
     border-radius: 12px;
     padding: 18px 22px;
     flex: 1;
-    min-width: 180px;
+    min-width: 170px;
     text-align: center;
     position: relative;
     overflow: hidden;
@@ -110,7 +108,7 @@ html, body, [class*="css"] {{
     margin-bottom: 6px;
 }}
 .metric-card .value {{
-    font-size: 28px;
+    font-size: 26px;
     font-weight: 800;
     letter-spacing: -0.5px;
 }}
@@ -120,7 +118,6 @@ html, body, [class*="css"] {{
 .metric-card .value.yellow {{ color: {C_YELLOW}; }}
 .metric-card .value.white {{ color: {C_TEXT}; }}
 
-/* Glow effect for P&L card */
 .metric-card.glow-green {{
     border-color: rgba(0,230,118,0.3);
     box-shadow: 0 0 20px rgba(0,230,118,0.12);
@@ -167,36 +164,48 @@ html, body, [class*="css"] {{
     box-shadow: 0 0 35px rgba(255,23,68,0.10);
 }}
 
-/* ── Legs Table ── */
-.legs-table {{
+/* ── Tables — responsive scroll wrapper ── */
+.table-scroll {{
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 12px 0;
+    border-radius: 10px;
+    border: 1px solid {C_BORDER};
+    background: {C_CARD};
+}}
+.table-scroll table {{
     width: 100%;
+    min-width: 560px;
     border-collapse: separate;
     border-spacing: 0;
     font-size: 14px;
-    margin: 12px 0;
     direction: ltr;
 }}
-.legs-table th {{
-    background: {C_CARD};
+.table-scroll th {{
+    background: rgba(255,255,255,0.03);
     color: {C_DIM};
     font-weight: 600;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    padding: 10px 14px;
+    padding: 11px 14px;
     border-bottom: 1px solid {C_BORDER};
     text-align: center;
+    position: sticky;
+    top: 0;
+    z-index: 1;
 }}
-.legs-table td {{
+.table-scroll td {{
     padding: 10px 14px;
     text-align: center;
-    border-bottom: 1px solid {C_BORDER};
+    border-bottom: 1px solid rgba(30,36,51,0.6);
     color: {C_TEXT};
     font-weight: 500;
 }}
-.legs-table tr:last-child td {{ border-bottom: none; }}
-.legs-table .buy  {{ color: {C_GREEN}; font-weight: 700; }}
-.legs-table .sell {{ color: {C_RED}; font-weight: 700; }}
+.table-scroll tr:last-child td {{ border-bottom: none; }}
+.table-scroll tr:hover td {{ background: rgba(255,255,255,0.02); }}
+.table-scroll .buy  {{ color: {C_GREEN}; font-weight: 700; }}
+.table-scroll .sell {{ color: {C_RED}; font-weight: 700; }}
 
 /* ── Status Badge ── */
 .badge {{
@@ -228,12 +237,119 @@ html, body, [class*="css"] {{
     color: {C_TEXT};
     font-size: 16px;
     font-weight: 700;
-    margin: 22px 0 8px;
+    margin: 24px 0 10px;
     padding-bottom: 6px;
     border-bottom: 1px solid {C_BORDER};
+    direction: rtl;
+    text-align: right;
 }}
 
-/* Streamlit overrides */
+/* ── Step Breadcrumb ── */
+.step-breadcrumb {{
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 16px 0 8px;
+    direction: rtl;
+}}
+.step-breadcrumb .crumb {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: {C_DIM};
+}}
+.step-breadcrumb .crumb.active {{
+    color: {C_BLUE};
+}}
+.step-breadcrumb .num {{
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    background: {C_CARD};
+    border: 1px solid {C_BORDER};
+    color: {C_DIM};
+    flex-shrink: 0;
+}}
+.step-breadcrumb .crumb.active .num {{
+    background: rgba(0,176,255,0.15);
+    border-color: {C_BLUE};
+    color: {C_BLUE};
+}}
+.step-breadcrumb .sep {{
+    color: {C_BORDER};
+    font-size: 14px;
+    margin: 0 2px;
+}}
+
+/* ── Comparison Bar ── */
+.cmp-row {{
+    background: {C_CARD};
+    border: 1px solid {C_BORDER};
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin: 8px 0;
+}}
+.cmp-line {{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 3px 0;
+}}
+.cmp-line .cmp-lbl {{
+    color: {C_DIM};
+    font-size: 11px;
+    font-weight: 600;
+    min-width: 55px;
+    text-align: left;
+}}
+.cmp-line .cmp-track {{
+    flex: 1;
+    height: 20px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 5px;
+    overflow: hidden;
+}}
+.cmp-line .cmp-fill {{
+    height: 100%;
+    border-radius: 5px;
+    transition: width 0.3s ease;
+}}
+.cmp-line .cmp-val {{
+    min-width: 85px;
+    text-align: right;
+    font-weight: 700;
+    font-size: 13px;
+}}
+
+/* ── Settlement position indicator ── */
+.strike-zone {{
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+}}
+.strike-zone.in {{
+    background: rgba(0,230,118,0.15);
+    color: {C_GREEN};
+}}
+.strike-zone.out-put {{
+    background: rgba(255,23,68,0.12);
+    color: {C_RED};
+}}
+.strike-zone.out-call {{
+    background: rgba(255,23,68,0.12);
+    color: {C_RED};
+}}
+
+/* ── Streamlit overrides ── */
 .stSelectbox label {{ color: {C_TEXT} !important; font-weight: 600 !important; }}
 div[data-baseweb="select"] {{
     background: {C_CARD} !important;
@@ -290,7 +406,6 @@ def load_strategies() -> pd.DataFrame:
 
     df = pd.DataFrame(all_rows)
 
-    # Ensure numeric columns
     num_cols = [
         "base_index_value", "interval_pct",
         "short_put_strike", "long_put_strike",
@@ -340,7 +455,6 @@ def get_live_index() -> float:
 # ==================================================================
 
 def fmt_ils(v: float) -> str:
-    """Format ILS amount."""
     sign = "+" if v > 0 else ""
     return f"{sign}{v:,.0f} ₪"
 
@@ -351,7 +465,6 @@ def fmt_num(v: float, decimals: int = 2) -> str:
 
 @st.cache_data(ttl=60)
 def _fetch_current_option_price(derivative_id: str, side: str) -> float:
-    """Fetch current lastrate for a specific option from tase_putcall."""
     if not derivative_id or not SUPABASE_URL:
         return 0.0
     col_id = f"derivativeid_{side}"
@@ -379,19 +492,7 @@ def _fetch_current_option_price(derivative_id: str, side: str) -> float:
 
 
 def compute_unrealized_pnl(row: pd.Series, live_index: float) -> tuple:
-    """
-    Compute real unrealized P&L based on current option prices.
-
-    Real P&L = (entry_premium - current_premium) × MULTIPLIER
-    Where:
-      entry_premium   = what we received when selling the condor
-      current_premium = what it would cost to close now
-
-    Returns (pnl_ils, method) where method is "live" or "expiry_proxy".
-    """
     entry_premium = row.get("total_net_premium", 0)
-
-    # Try to get current prices for all 4 legs
     sc_id = str(row.get("short_call_id", ""))
     sp_id = str(row.get("short_put_id", ""))
     lc_id = str(row.get("long_call_id", ""))
@@ -402,14 +503,11 @@ def compute_unrealized_pnl(row: pd.Series, live_index: float) -> tuple:
     lc_now = _fetch_current_option_price(lc_id, "call") if lc_id else 0
     lp_now = _fetch_current_option_price(lp_id, "put") if lp_id else 0
 
-    # If we got at least the short legs priced, compute real P&L
     if sc_now > 0 or sp_now > 0:
         current_premium = (sc_now + sp_now) - (lc_now + lp_now)
-        # We sold at entry_premium, buying back at current_premium
         pnl_pts = entry_premium - current_premium
         return round(pnl_pts * MULTIPLIER, 2), "live"
 
-    # Fallback: expiry-proxy (same as before)
     sp_strike = row.get("short_put_strike", 0)
     sc_strike = row.get("short_call_strike", 0)
     lp_strike = row.get("long_put_strike", 0)
@@ -432,7 +530,6 @@ def compute_unrealized_pnl(row: pd.Series, live_index: float) -> tuple:
 
 
 def build_payoff_curve(row: pd.Series) -> tuple:
-    """Build x (price range) and y (P&L) arrays for payoff chart."""
     lp = row.get("long_put_strike", 0)
     sp = row.get("short_put_strike", 0)
     sc = row.get("short_call_strike", 0)
@@ -443,7 +540,6 @@ def build_payoff_curve(row: pd.Series) -> tuple:
 
     margin = max(100, (lc - lp) * 0.6)
     x = np.linspace(lp - margin, lc + margin, 500)
-
     y = np.zeros_like(x)
     for i, price in enumerate(x):
         if sp <= price <= sc:
@@ -457,8 +553,103 @@ def build_payoff_curve(row: pd.Series) -> tuple:
         else:
             pts = net_prem - wing_call
         y[i] = pts * MULTIPLIER
-
     return x, y
+
+
+def settlement_zone_label(idx_close: float, sp: float, sc: float, lp: float, lc: float) -> str:
+    """Return an HTML badge showing where settlement landed relative to strikes."""
+    if sp <= idx_close <= sc:
+        return '<span class="strike-zone in">SAFE ZONE</span>'
+    elif lp <= idx_close < sp:
+        return '<span class="strike-zone out-put">PUT BREACH</span>'
+    elif sc < idx_close <= lc:
+        return '<span class="strike-zone out-call">CALL BREACH</span>'
+    elif idx_close < lp:
+        return '<span class="strike-zone out-put">MAX LOSS PUT</span>'
+    else:
+        return '<span class="strike-zone out-call">MAX LOSS CALL</span>'
+
+
+# ==================================================================
+# RENDER COMPONENTS
+# ==================================================================
+
+def render_payoff_chart(row, ref_price: float = 0, ref_label: str = ""):
+    x_prices, y_pnl = build_payoff_curve(row)
+    be_upper = row.get("breakeven_upper", 0)
+    be_lower = row.get("breakeven_lower", 0)
+    fig = go.Figure()
+
+    profit_y = np.where(y_pnl >= 0, y_pnl, 0)
+    fig.add_trace(go.Scatter(x=x_prices, y=profit_y, fill="tozeroy", fillcolor="rgba(38,222,129,0.50)", line=dict(width=0), showlegend=False, hoverinfo="skip"))
+    loss_y = np.where(y_pnl < 0, y_pnl, 0)
+    fig.add_trace(go.Scatter(x=x_prices, y=loss_y, fill="tozeroy", fillcolor="rgba(255,77,77,0.50)", line=dict(width=0), showlegend=False, hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x_prices, y=y_pnl, mode="lines", line=dict(color="rgba(255,255,255,0.35)", width=1), showlegend=False, hovertemplate="Index: %{x:,.0f}<br>P&L: %{y:,.0f} ₪<extra></extra>"))
+    fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.15)", width=1))
+
+    be_x = [v for v in [be_lower, be_upper] if v > 0]
+    if be_x:
+        fig.add_trace(go.Scatter(x=be_x, y=[0] * len(be_x), mode="markers", marker=dict(color=C_ORANGE, size=10, symbol="circle", line=dict(color=C_BG, width=2)), showlegend=False, hovertemplate="Breakeven: %{x:,.0f}<extra></extra>"))
+
+    if ref_price > 0:
+        fig.add_vline(x=ref_price, line=dict(color="#00BCD4", width=2, dash="dot"))
+        fig.add_annotation(x=ref_price, y=max(y_pnl) * 0.9, text=ref_label, showarrow=False, font=dict(size=13, color="#00BCD4", family="Inter"), bgcolor="rgba(11,13,16,0.85)", bordercolor="#00BCD4", borderwidth=1, borderpad=6)
+
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor=C_BG, plot_bgcolor=C_BG,
+        height=360, margin=dict(l=50, r=30, t=20, b=50),
+        xaxis=dict(gridcolor="rgba(255,255,255,0.04)", zeroline=False, tickformat=",", tickfont=dict(size=10, color=C_DIM), showgrid=True, dtick=40),
+        yaxis=dict(title="P&L (₪)", gridcolor="rgba(255,255,255,0.06)", zeroline=False, tickformat=",", tickfont=dict(size=10, color=C_DIM), title_font=dict(size=11, color=C_DIM), showgrid=True),
+        showlegend=False, hovermode="x unified",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_legs_table(row):
+    legs = [
+        ("Long Put", "BUY", row.get("long_put_strike", 0), row.get("long_put_price", 0), row.get("long_put_delta", 0), row.get("long_put_id", "")),
+        ("Short Put", "SELL", row.get("short_put_strike", 0), row.get("short_put_price", 0), row.get("short_put_delta", 0), row.get("short_put_id", "")),
+        ("Short Call", "SELL", row.get("short_call_strike", 0), row.get("short_call_price", 0), row.get("short_call_delta", 0), row.get("short_call_id", "")),
+        ("Long Call", "BUY", row.get("long_call_strike", 0), row.get("long_call_price", 0), row.get("long_call_delta", 0), row.get("long_call_id", "")),
+    ]
+    html = '<div class="table-scroll"><table><thead><tr><th>Leg</th><th>Action</th><th>Strike</th><th>Premium</th><th>Delta</th><th>ID</th></tr></thead><tbody>'
+    for name, action, strike, price, delta, opt_id in legs:
+        css = "sell" if action == "SELL" else "buy"
+        html += f'<tr><td>{name}</td><td class="{css}">{action}</td><td><strong>{fmt_num(strike, 0)}</strong></td><td>{fmt_num(price)}</td><td>{fmt_num(delta, 4)}</td><td style="color:{C_DIM};font-size:11px">{opt_id}</td></tr>'
+    html += "</tbody></table></div>"
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def render_expiry_metrics(row):
+    net_prem = row.get("total_net_premium", 0)
+    max_profit = row.get("max_profit_ils", 0)
+    max_risk = row.get("max_risk_ils", 0)
+    rr = row.get("risk_reward_ratio", 0)
+    be_upper = row.get("breakeven_upper", 0)
+    be_lower = row.get("breakeven_lower", 0)
+    dte = int(row.get("days_to_expiry", 0))
+    prem_color = "green" if net_prem > 0 else "red"
+    st.markdown(
+        f'<div class="metric-grid">'
+        f'<div class="metric-card"><div class="label">Net Premium (pts)</div><div class="value {prem_color}">{fmt_num(net_prem)}</div></div>'
+        f'<div class="metric-card"><div class="label">Max Profit</div><div class="value green">{fmt_ils(max_profit)}</div></div>'
+        f'<div class="metric-card"><div class="label">Max Risk</div><div class="value red">{fmt_ils(-abs(max_risk))}</div></div>'
+        f'<div class="metric-card"><div class="label">Risk / Reward</div><div class="value white">1:{fmt_num(rr, 1)}</div></div>'
+        f'<div class="metric-card"><div class="label">Breakeven</div><div class="value white">{fmt_num(be_lower, 0)} — {fmt_num(be_upper, 0)}</div></div>'
+        f'<div class="metric-card"><div class="label">DTE</div><div class="value blue">{dte}</div></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_breadcrumb(steps: list):
+    """Render step breadcrumb. steps = list of (label, is_active)."""
+    parts = []
+    for i, (label, active) in enumerate(steps):
+        cls = "crumb active" if active else "crumb"
+        parts.append(f'<span class="{cls}"><span class="num">{i+1}</span>{label}</span>')
+    html = '<div class="step-breadcrumb">' + '<span class="sep">‹</span>'.join(parts) + '</div>'
+    st.markdown(html, unsafe_allow_html=True)
 
 
 # ==================================================================
@@ -483,7 +674,6 @@ if df.empty:
     st.warning("אין נתוני אסטרטגיות ב-Supabase. ודא שהמערכת רצה ושיש חיבור תקין.")
     st.stop()
 
-# Build week labels: "2026-W22 (25/05)"
 df["_trigger_dt"] = pd.to_datetime(df["trigger_date"], errors="coerce")
 df["_iso_week"] = df["_trigger_dt"].dt.isocalendar().week.astype(int)
 df["_iso_year"] = df["_trigger_dt"].dt.isocalendar().year.astype(int)
@@ -491,519 +681,323 @@ df["_week_label"] = df.apply(
     lambda r: f"{int(r['_iso_year'])}-W{int(r['_iso_week']):02d}  ({r['trigger_date']})",
     axis=1,
 )
-
-# Determine settled vs active
-today_str = now_il.strftime("%Y-%m-%d")
 df["_is_settled"] = df["result_status"].notna() & (df["result_status"] != "")
 
-# Unique weeks sorted chronologically
 week_options = (
     df[["_week_label", "_trigger_dt"]]
     .drop_duplicates("_week_label")
     .sort_values("_trigger_dt", ascending=False)
 )["_week_label"].tolist()
 
-interval_options = sorted(df["interval_pct"].unique())
-
-
-# ==================================================================
-# EXECUTIVE CONTROL BOARD
-# ==================================================================
-col_w, col_i = st.columns(2)
-with col_w:
-    selected_week = st.selectbox(
-        "📅 בחר שבוע מסחר / תאריך הרצה",
-        week_options,
-        index=0,
-    )
-with col_i:
-    selected_interval = st.selectbox(
-        "📐 בחר מרווח אסטרטגיה (% Interval)",
-        interval_options,
-        format_func=lambda x: f"{x:.1f}%",
-        index=0,
-    )
-
-# Filter to selected week + interval
-mask = (df["_week_label"] == selected_week) & (df["interval_pct"] == selected_interval)
-filtered = df[mask].copy()
-
-if filtered.empty:
-    st.info("אין אסטרטגיות למרווח ולשבוע שנבחרו.")
-    st.stop()
-
-# Sort by expiry date
-filtered = filtered.sort_values("expiry_date")
-
-# Get live index for active positions
 live_index = get_live_index()
 
-# Base index at entry
-base_index = filtered.iloc[0].get("base_index_value", 0)
-trigger_date = filtered.iloc[0].get("trigger_date", "")
-trigger_time = filtered.iloc[0].get("trigger_time", "")
-
-# Count settled / active
-n_settled = int(filtered["_is_settled"].sum())
-n_active = len(filtered) - n_settled
-n_total = len(filtered)
-
 
 # ==================================================================
-# TOP METRICS ROW
+# STEP 1 — GLOBAL: Week selector
 # ==================================================================
-# Overall P&L for settled strategies
-settled_pnl = filtered.loc[filtered["_is_settled"], "actual_pnl_ils"].sum()
+render_breadcrumb([("שבוע מסחר", True)])
 
-# Unrealized P&L for active strategies
-unrealized_pnl = 0.0
-pnl_method = "live"
-if n_active > 0 and live_index > 0:
-    for _, row in filtered[~filtered["_is_settled"]].iterrows():
-        pnl_val, method = compute_unrealized_pnl(row, live_index)
-        unrealized_pnl += pnl_val
-        if method == "expiry_proxy":
-            pnl_method = "expiry_proxy"
+selected_week = st.selectbox(
+    "📅 שבוע מסחר / תאריך הרצה",
+    week_options,
+    index=0,
+    label_visibility="collapsed",
+)
 
-total_pnl = settled_pnl + unrealized_pnl
-
-# Status badge
-if n_active == 0:
-    status_html = '<span class="badge settled">✅ SETTLED</span>'
-elif n_settled == 0:
-    status_html = '<span class="badge active">🔵 ACTIVE</span>'
-else:
-    status_html = '<span class="badge active">🔵 PARTIALLY ACTIVE</span>'
-
-st.markdown(f"""
-<div class="metric-grid">
-    <div class="metric-card">
-        <div class="label">📅 תאריך הרצה</div>
-        <div class="value white">{trigger_date}</div>
-    </div>
-    <div class="metric-card">
-        <div class="label">⏰ שעת הרצה</div>
-        <div class="value white">{trigger_time}</div>
-    </div>
-    <div class="metric-card">
-        <div class="label">📊 מדד כניסה (TA-35)</div>
-        <div class="value yellow">{fmt_num(base_index)}</div>
-    </div>
-    <div class="metric-card">
-        <div class="label">📐 מרווח</div>
-        <div class="value blue">{selected_interval:.1f}%</div>
-    </div>
-    <div class="metric-card">
-        <div class="label">🎯 פקיעות</div>
-        <div class="value white">{n_total} ({n_settled} settled / {n_active} active)</div>
-    </div>
-    <div class="metric-card">
-        <div class="label">סטטוס</div>
-        <div style="margin-top:6px">{status_html}</div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-
-# ==================================================================
-# P&L BREAKDOWN BY INTERVAL
-# ==================================================================
 week_all = df[df["_week_label"] == selected_week].copy()
+if week_all.empty:
+    st.info("אין אסטרטגיות לשבוע שנבחר.")
+    st.stop()
 
-# Compute P&L per interval
-interval_pnl_rows = []
-for pct in sorted(week_all["interval_pct"].unique()):
-    idf = week_all[week_all["interval_pct"] == pct]
-    settled_sum = idf.loc[idf["_is_settled"], "actual_pnl_ils"].sum()
-    unrealized_sum = 0.0
-    method = "live"
-    for _, r in idf[~idf["_is_settled"]].iterrows():
-        if live_index > 0:
-            val, m = compute_unrealized_pnl(r, live_index)
-            unrealized_sum += val
-            if m == "expiry_proxy":
-                method = "expiry_proxy"
-    total = settled_sum + unrealized_sum
-    n_s = int(idf["_is_settled"].sum())
-    n_a = len(idf) - n_s
-    interval_pnl_rows.append({
-        "pct": pct, "settled_pnl": settled_sum,
-        "unrealized_pnl": unrealized_sum, "total_pnl": total,
-        "n_settled": n_s, "n_active": n_a, "method": method,
-    })
+base_index = week_all.iloc[0].get("base_index_value", 0)
+trigger_date = week_all.iloc[0].get("trigger_date", "")
+trigger_time = week_all.iloc[0].get("trigger_time", "")
 
-# Build compact P&L table for all intervals
-pnl_table = (
-    '<div dir="ltr" class="table-container"><table class="legs-table">'
-    '<thead><tr>'
-    '<th>מרווח</th><th>פקיעות</th>'
-    '<th>P&L מומש</th><th>P&L צף</th><th>סה"כ</th>'
-    '</tr></thead><tbody>'
+n_total_week = len(week_all)
+n_settled_week = int(week_all["_is_settled"].sum())
+n_active_week = n_total_week - n_settled_week
+
+if n_active_week == 0:
+    week_status = '<span class="badge settled">SETTLED</span>'
+elif n_settled_week == 0:
+    week_status = '<span class="badge active">ACTIVE</span>'
+else:
+    week_status = '<span class="badge active">PARTIAL</span>'
+
+st.markdown(
+    f'<div class="metric-grid">'
+    f'<div class="metric-card"><div class="label">Run Date</div><div class="value white">{trigger_date}</div></div>'
+    f'<div class="metric-card"><div class="label">Run Time</div><div class="value white">{trigger_time}</div></div>'
+    f'<div class="metric-card"><div class="label">Entry Index</div><div class="value yellow">{fmt_num(base_index)}</div></div>'
+    f'<div class="metric-card"><div class="label">Strategies</div><div class="value white">{n_total_week}</div></div>'
+    f'<div class="metric-card"><div class="label">Status</div><div style="margin-top:6px">{week_status}</div></div>'
+    f'</div>',
+    unsafe_allow_html=True,
 )
-grand_total = 0.0
-for ip in interval_pnl_rows:
-    pct = ip["pct"]
-    total = ip["total_pnl"]
-    grand_total += total
-    t_css = "buy" if total > 0 else ("sell" if total < 0 else "")
-    s_css = "buy" if ip["settled_pnl"] > 0 else ("sell" if ip["settled_pnl"] < 0 else "")
-    u_css = "buy" if ip["unrealized_pnl"] > 0 else ("sell" if ip["unrealized_pnl"] < 0 else "")
-    highlight = ' style="background:rgba(47,128,237,0.10)"' if pct == selected_interval else ""
-    status = f'{ip["n_settled"]}✅ {ip["n_active"]}🔵' if ip["n_active"] > 0 else f'{ip["n_settled"]}✅'
-    pnl_table += (
-        f'<tr{highlight}>'
-        f'<td><strong>{pct:.1f}%</strong></td>'
-        f'<td>{status}</td>'
-        f'<td class="{s_css}">{fmt_ils(ip["settled_pnl"])}</td>'
-        f'<td class="{u_css}">{fmt_ils(ip["unrealized_pnl"])}</td>'
-        f'<td class="{t_css}"><strong>{fmt_ils(total)}</strong></td>'
-        f'</tr>'
-    )
-
-# Grand total row
-gt_css = "buy" if grand_total > 0 else ("sell" if grand_total < 0 else "")
-pnl_table += (
-    f'<tr style="border-top:2px solid {C_BORDER};font-weight:700">'
-    f'<td>סה"כ</td><td></td><td></td><td></td>'
-    f'<td class="{gt_css}"><strong>{fmt_ils(grand_total)}</strong></td>'
-    f'</tr>'
-)
-pnl_table += '</tbody></table></div>'
-
-st.markdown('<div class="section-hdr">💰 P&L לפי מרווח — שבוע נבחר</div>',
-            unsafe_allow_html=True)
-st.markdown(pnl_table, unsafe_allow_html=True)
 
 
 # ==================================================================
-# LIVE INDEX / SETTLEMENT INDEX
+# TABS
 # ==================================================================
-if n_active > 0 and live_index > 0:
-    idx_color = "green" if live_index >= base_index else "red"
-    chg_color = "green" if live_index >= base_index else "red"
-    sp_color = "green" if settled_pnl >= 0 else "red"
-    up_color = "green" if unrealized_pnl >= 0 else "red"
-    glow = "green" if idx_color == "green" else "red"
-    chg_val = live_index - base_index
-    chg_pct = chg_val / base_index * 100 if base_index > 0 else 0
-    st.markdown(
-        f'<div class="metric-grid">'
-        f'<div class="metric-card glow-{glow}"><div class="label">🔴 מדד נוכחי בשוק (פוזיציה פתוחה)</div><div class="value {idx_color}">{fmt_num(live_index)}</div></div>'
-        f'<div class="metric-card"><div class="label">📊 שינוי מכניסה</div><div class="value {chg_color}">{fmt_num(chg_val)} ({chg_pct:+.2f}%)</div></div>'
-        f'<div class="metric-card"><div class="label">💰 P&L מומש (settled)</div><div class="value {sp_color}">{fmt_ils(settled_pnl)}</div></div>'
-        f'<div class="metric-card"><div class="label">📈 P&L צף (active)</div><div class="value {up_color}">{fmt_ils(unrealized_pnl)}</div></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-
-# ==================================================================
-# PER-EXPIRY BREAKDOWN
-# ==================================================================
-# ==================================================================
-# SPLIT INTO TABS: Active vs History
-# ==================================================================
-active_df = filtered[~filtered["_is_settled"]]
-history_df = filtered[filtered["_is_settled"]]
+all_active = week_all[~week_all["_is_settled"]]
+all_history = week_all[week_all["_is_settled"]]
 
 tab_active, tab_history = st.tabs([
-    f"🔵 פוזיציות פתוחות ({len(active_df)})",
-    f"📜 היסטוריה ({len(history_df)})",
+    f"🔵 Open Positions ({len(all_active)})",
+    f"📜 History ({len(all_history)})",
 ])
 
 
-def render_expiry_card(row, container):
-    """Render a single expiry card (legs table, metrics, payoff chart)."""
-    exp_date = row.get("expiry_date", "")
-    exp_day = row.get("expiry_day_name", "")
-    exp_day_he = DAY_HE.get(exp_day, exp_day)
-    is_settled = row["_is_settled"]
-    result_status = row.get("result_status", "")
-
-    if is_settled:
-        pnl = row.get("actual_pnl_ils", 0)
-        pnl_icon = "✅" if pnl > 0 else "❌"
-        badge_text = f"{pnl_icon} {fmt_ils(pnl)}"
-        idx_label = f"מדד פקיעה: {fmt_num(row.get('actual_index_close', 0))}"
+# ==================================================================
+# ACTIVE TAB — Week → Expiry → Interval
+# ==================================================================
+with tab_active:
+    if all_active.empty:
+        st.info("אין פוזיציות פתוחות כרגע — כל האסטרטגיות של השבוע פקעו.")
     else:
-        if live_index > 0:
-            u_pnl, _ = compute_unrealized_pnl(row, live_index)
-            badge_text = f"🔵 צף: {fmt_ils(u_pnl)}"
-        else:
-            badge_text = "🔵 פתוח"
-        idx_label = f"מדד נוכחי: {fmt_num(live_index)}" if live_index > 0 else ""
+        # ── P&L by interval for this tab ──
+        active_intervals = sorted(all_active["interval_pct"].unique())
 
-    expander_label = f"📅 {exp_date} — יום {exp_day_he}  |  {badge_text}  |  {idx_label}"
-    with container.expander(expander_label, expanded=True):
+        interval_pnl_active = []
+        for pct in active_intervals:
+            idf = all_active[all_active["interval_pct"] == pct]
+            total_unr = 0.0
+            for _, r in idf.iterrows():
+                if live_index > 0:
+                    val, _ = compute_unrealized_pnl(r, live_index)
+                    total_unr += val
+            interval_pnl_active.append({"pct": pct, "n": len(idf), "pnl": total_unr})
 
-        # ── 4 Legs Table ──
-        legs = [
-            ("Long Put (הגנה)", "BUY", row.get("long_put_strike", 0),
-             row.get("long_put_price", 0), row.get("long_put_delta", 0),
-             row.get("long_put_id", "")),
-            ("Short Put (מכירה)", "SELL", row.get("short_put_strike", 0),
-             row.get("short_put_price", 0), row.get("short_put_delta", 0),
-             row.get("short_put_id", "")),
-            ("Short Call (מכירה)", "SELL", row.get("short_call_strike", 0),
-             row.get("short_call_price", 0), row.get("short_call_delta", 0),
-             row.get("short_call_id", "")),
-            ("Long Call (הגנה)", "BUY", row.get("long_call_strike", 0),
-             row.get("long_call_price", 0), row.get("long_call_delta", 0),
-             row.get("long_call_id", "")),
-        ]
+        # Summary cards
+        summary_html = '<div class="metric-grid">'
+        for ip in interval_pnl_active:
+            u_color = "green" if ip["pnl"] >= 0 else "red"
+            glow = "glow-green" if ip["pnl"] >= 0 else "glow-red"
+            summary_html += f'<div class="metric-card {glow}"><div class="label">{ip["pct"]:.1f}% ({ip["n"]})</div><div class="value {u_color}">{fmt_ils(ip["pnl"])}</div></div>'
+        summary_html += '</div>'
+        st.markdown(summary_html, unsafe_allow_html=True)
 
-        legs_html = (
-            '<div dir="ltr" class="table-container"><table class="legs-table">'
-            '<thead><tr>'
-            '<th>Leg</th><th>Action</th><th>Strike</th>'
-            '<th>Premium</th><th>Delta</th><th>ID</th>'
-            '</tr></thead><tbody>'
+        # Step 2: Select expiry date
+        active_expiry_dates = sorted(all_active["expiry_date"].unique())
+        active_expiry_labels = {}
+        for ed in active_expiry_dates:
+            edf = all_active[all_active["expiry_date"] == ed]
+            day_he = DAY_HE.get(edf.iloc[0].get("expiry_day_name", ""), "")
+            n_intervals = len(edf["interval_pct"].unique())
+            active_expiry_labels[ed] = f"{ed} — יום {day_he}  |  {n_intervals} מרווחים"
+
+        render_breadcrumb([("שבוע", False), ("תאריך פקיעה", True)])
+
+        sel_active_expiry = st.selectbox(
+            "📅 תאריך פקיעה",
+            active_expiry_dates,
+            format_func=lambda x: active_expiry_labels.get(x, x),
+            key="active_expiry",
         )
-        for name, action, strike, price, delta, opt_id in legs:
-            css = "sell" if action == "SELL" else "buy"
-            legs_html += (
-                f'<tr>'
-                f'<td>{name}</td>'
-                f'<td class="{css}">{action}</td>'
-                f'<td><strong>{fmt_num(strike, 0)}</strong></td>'
-                f'<td>{fmt_num(price)}</td>'
-                f'<td>{fmt_num(delta, 4)}</td>'
-                f'<td style="color:{C_DIM};font-size:11px">{opt_id}</td>'
-                f'</tr>'
+
+        # Filter to selected expiry
+        active_by_expiry = all_active[all_active["expiry_date"] == sel_active_expiry]
+
+        # Step 3: Select interval
+        avail_intervals = sorted(active_by_expiry["interval_pct"].unique())
+        interval_preview = []
+        for pct in avail_intervals:
+            r = active_by_expiry[active_by_expiry["interval_pct"] == pct].iloc[0]
+            if live_index > 0:
+                u, _ = compute_unrealized_pnl(r, live_index)
+            else:
+                u = 0.0
+            interval_preview.append({"pct": pct, "pnl": u})
+
+        render_breadcrumb([("שבוע", False), ("פקיעה", False), ("מרווח", True)])
+
+        sel_active_interval = st.selectbox(
+            "📐 מרווח אסטרטגיה",
+            avail_intervals,
+            format_func=lambda x: f"{x:.1f}%",
+            key="active_interval",
+        )
+
+        # ── Render detail ──
+        row = active_by_expiry[active_by_expiry["interval_pct"] == sel_active_interval].iloc[0]
+
+        # Live index strip
+        if live_index > 0:
+            idx_color = "green" if live_index >= base_index else "red"
+            chg_val = live_index - base_index
+            chg_pct = chg_val / base_index * 100 if base_index > 0 else 0
+            u_pnl, u_method = compute_unrealized_pnl(row, live_index)
+            unr_color = "green" if u_pnl >= 0 else "red"
+            glow = "green" if u_pnl >= 0 else "red"
+            method_label = "LIVE" if u_method == "live" else "PROXY"
+            st.markdown(
+                f'<div class="metric-grid">'
+                f'<div class="metric-card glow-{("green" if live_index >= base_index else "red")}"><div class="label">Live Index</div><div class="value {idx_color}">{fmt_num(live_index)}</div></div>'
+                f'<div class="metric-card"><div class="label">Change from Entry</div><div class="value {idx_color}">{fmt_num(chg_val)} ({chg_pct:+.2f}%)</div></div>'
+                f'<div class="metric-card glow-{glow}"><div class="label">Unrealized P&L ({method_label})</div><div class="value {unr_color}">{fmt_ils(u_pnl)}</div></div>'
+                f'</div>',
+                unsafe_allow_html=True,
             )
-        legs_html += "</tbody></table></div>"
-        st.markdown(legs_html, unsafe_allow_html=True)
 
-        # ── Key metrics for this expiry ──
-        net_prem = row.get("total_net_premium", 0)
+        render_legs_table(row)
+        render_expiry_metrics(row)
+
+        ref_p = live_index if live_index > 0 else 0
+        ref_l = f"Live: {ref_p:,.2f}" if ref_p > 0 else ""
+        render_payoff_chart(row, ref_price=ref_p, ref_label=ref_l)
+
+
+# ==================================================================
+# HISTORY TAB — Week → Expiry → Interval
+# ==================================================================
+with tab_history:
+    if all_history.empty:
+        st.info("אין היסטוריה — אף אסטרטגיה לא פקעה עדיין.")
+    else:
+        # ── P&L by interval table (inside history tab) ──
+        history_intervals = sorted(all_history["interval_pct"].unique())
+
+        comparison_data = []
+        for pct in history_intervals:
+            idf = all_history[all_history["interval_pct"] == pct]
+            actual_pnl = idf["actual_pnl_ils"].sum()
+            max_possible = idf["max_profit_ils"].sum()
+            n_total = len(idf)
+            n_wins = int((idf["actual_pnl_ils"] > 0).sum())
+            comparison_data.append({
+                "pct": pct, "actual_pnl": actual_pnl,
+                "max_possible": max_possible, "n_total": n_total,
+                "n_wins": n_wins,
+            })
+
+        st.markdown('<div class="section-hdr">📊 מה יכולת להרוויח? — השוואת מרווחים</div>', unsafe_allow_html=True)
+
+        # Comparison table
+        best_pct = max(comparison_data, key=lambda x: x["actual_pnl"])["pct"] if comparison_data else 0
+        comp_html = '<div class="table-scroll"><table><thead><tr><th>Interval</th><th>Expiries</th><th>Wins</th><th>Win Rate</th><th>Max Possible</th><th>Actual P&L</th><th>Utilization</th></tr></thead><tbody>'
+        for cd in comparison_data:
+            pct = cd["pct"]
+            actual = cd["actual_pnl"]
+            max_p = cd["max_possible"]
+            wr = (cd["n_wins"] / cd["n_total"] * 100) if cd["n_total"] > 0 else 0
+            util = (actual / max_p * 100) if max_p > 0 else 0
+            a_css = "buy" if actual > 0 else ("sell" if actual < 0 else "")
+            wr_css = "buy" if wr >= 70 else ("sell" if wr < 40 else "")
+            u_css = "buy" if util > 50 else ("sell" if util < 0 else "")
+            hl = ' style="background:rgba(0,230,118,0.06)"' if pct == best_pct else ""
+            comp_html += f'<tr{hl}><td><strong>{pct:.1f}%</strong></td><td>{cd["n_total"]}</td><td>{cd["n_wins"]}</td><td class="{wr_css}">{wr:.0f}%</td><td class="buy">{fmt_ils(max_p)}</td><td class="{a_css}"><strong>{fmt_ils(actual)}</strong></td><td class="{u_css}">{util:.0f}%</td></tr>'
+        comp_html += '</tbody></table></div>'
+        st.markdown(comp_html, unsafe_allow_html=True)
+
+        # Visual comparison bars
+        st.markdown('<div class="section-hdr">📈 Max Profit vs. Actual P&L</div>', unsafe_allow_html=True)
+        abs_max = max(max(abs(cd["max_possible"]), abs(cd["actual_pnl"])) for cd in comparison_data) if comparison_data else 1
+        for cd in comparison_data:
+            pct = cd["pct"]
+            max_p = cd["max_possible"]
+            actual = cd["actual_pnl"]
+            max_w = (max_p / abs_max * 100) if abs_max > 0 else 0
+            actual_w = (abs(actual) / abs_max * 100) if abs_max > 0 else 0
+            bar_c = C_GREEN if actual >= 0 else C_RED
+            st.markdown(
+                f'<div class="cmp-row">'
+                f'<div style="font-weight:700;color:{C_TEXT};font-size:14px;margin-bottom:6px">{pct:.1f}%</div>'
+                f'<div class="cmp-line"><span class="cmp-lbl">Max</span><div class="cmp-track"><div class="cmp-fill" style="width:{max_w:.0f}%;background:{C_BLUE}"></div></div><span class="cmp-val" style="color:{C_BLUE}">{fmt_ils(max_p)}</span></div>'
+                f'<div class="cmp-line"><span class="cmp-lbl">Actual</span><div class="cmp-track"><div class="cmp-fill" style="width:{actual_w:.0f}%;background:{bar_c}"></div></div><span class="cmp-val" style="color:{bar_c}">{fmt_ils(actual)}</span></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Step 2: Select expiry date ──
+        st.markdown('<div class="section-hdr">🔍 ניתוח מפורט לפי פקיעה ומרווח</div>', unsafe_allow_html=True)
+
+        hist_expiry_dates = sorted(all_history["expiry_date"].unique())
+        hist_expiry_labels = {}
+        for ed in hist_expiry_dates:
+            edf = all_history[all_history["expiry_date"] == ed]
+            day_he = DAY_HE.get(edf.iloc[0].get("expiry_day_name", ""), "")
+            total_pnl_day = edf["actual_pnl_ils"].sum()
+            icon = "✅" if total_pnl_day > 0 else "❌"
+            hist_expiry_labels[ed] = f"{ed} — {day_he}  |  {icon} {fmt_ils(total_pnl_day)}"
+
+        render_breadcrumb([("שבוע", False), ("תאריך פקיעה", True)])
+
+        sel_hist_expiry = st.selectbox(
+            "📅 תאריך פקיעה",
+            hist_expiry_dates,
+            format_func=lambda x: hist_expiry_labels.get(x, x),
+            key="history_expiry",
+        )
+
+        hist_by_expiry = all_history[all_history["expiry_date"] == sel_hist_expiry]
+
+        # Step 3: Select interval
+        hist_avail_intervals = sorted(hist_by_expiry["interval_pct"].unique())
+
+        render_breadcrumb([("שבוע", False), ("פקיעה", False), ("מרווח", True)])
+
+        sel_hist_interval = st.selectbox(
+            "📐 מרווח אסטרטגיה",
+            hist_avail_intervals,
+            format_func=lambda x: f"{x:.1f}%",
+            key="history_interval",
+        )
+
+        row = hist_by_expiry[hist_by_expiry["interval_pct"] == sel_hist_interval].iloc[0]
+
+        # Settlement info strip
+        settle_price = row.get("actual_index_close", 0)
+        sp_s = row.get("short_put_strike", 0)
+        sc_s = row.get("short_call_strike", 0)
+        lp_s = row.get("long_put_strike", 0)
+        lc_s = row.get("long_call_strike", 0)
+        zone_badge = settlement_zone_label(settle_price, sp_s, sc_s, lp_s, lc_s) if settle_price > 0 else ""
+
+        actual_pnl = row.get("actual_pnl_ils", 0)
         max_profit = row.get("max_profit_ils", 0)
-        max_risk = row.get("max_risk_ils", 0)
-        rr = row.get("risk_reward_ratio", 0)
-        be_upper = row.get("breakeven_upper", 0)
-        be_lower = row.get("breakeven_lower", 0)
-        dte = int(row.get("days_to_expiry", 0))
+        a_color = "green" if actual_pnl >= 0 else "red"
+        glow = "glow-green" if actual_pnl >= 0 else "glow-red"
 
-        prem_color = "green" if net_prem > 0 else "red"
         st.markdown(
             f'<div class="metric-grid">'
-            f'<div class="metric-card"><div class="label">פרמיה נטו (נק\')</div><div class="value {prem_color}">{fmt_num(net_prem)}</div></div>'
-            f'<div class="metric-card"><div class="label">רווח מקסימלי</div><div class="value green">{fmt_ils(max_profit)}</div></div>'
-            f'<div class="metric-card"><div class="label">הפסד מקסימלי</div><div class="value red">{fmt_ils(-abs(max_risk))}</div></div>'
-            f'<div class="metric-card"><div class="label">Risk/Reward</div><div class="value white">1:{fmt_num(rr, 1)}</div></div>'
-            f'<div class="metric-card"><div class="label">Breakeven</div><div class="value white">{fmt_num(be_lower, 0)} — {fmt_num(be_upper, 0)}</div></div>'
-            f'<div class="metric-card"><div class="label">ימים לפקיעה</div><div class="value blue">{dte}</div></div>'
+            f'<div class="metric-card"><div class="label">Settlement Index</div><div class="value white">{fmt_num(settle_price)}</div></div>'
+            f'<div class="metric-card"><div class="label">Position</div><div style="margin-top:8px">{zone_badge}</div></div>'
+            f'<div class="metric-card {glow}"><div class="label">Actual P&L</div><div class="value {a_color}">{fmt_ils(actual_pnl)}</div></div>'
+            f'<div class="metric-card"><div class="label">Max Possible</div><div class="value blue">{fmt_ils(max_profit)}</div></div>'
             f'</div>',
             unsafe_allow_html=True,
         )
 
-        # ── Payoff Chart (trading-desk style) ──
-        x_prices, y_pnl = build_payoff_curve(row)
+        render_legs_table(row)
 
-        fig = go.Figure()
+        # Strike vs Settlement table — where did the index land?
+        strike_table = '<div class="table-scroll"><table><thead><tr><th>Strike Level</th><th>Value</th><th>Settlement</th><th>Distance</th></tr></thead><tbody>'
+        strikes = [("Long Put", lp_s), ("Short Put", sp_s), ("Short Call", sc_s), ("Long Call", lc_s)]
+        for label, strike_val in strikes:
+            if strike_val > 0 and settle_price > 0:
+                dist = settle_price - strike_val
+                dist_css = "buy" if dist > 0 else "sell"
+                marker = " ◄" if abs(dist) == min(abs(settle_price - s) for _, s in strikes if s > 0) else ""
+                strike_table += f'<tr><td>{label}</td><td><strong>{fmt_num(strike_val, 0)}</strong></td><td>{fmt_num(settle_price)}</td><td class="{dist_css}">{dist:+.2f}{marker}</td></tr>'
+        strike_table += '</tbody></table></div>'
+        st.markdown(strike_table, unsafe_allow_html=True)
 
-        # Solid green fill for profit zone
-        profit_y = np.where(y_pnl >= 0, y_pnl, 0)
-        fig.add_trace(go.Scatter(
-            x=x_prices, y=profit_y,
-            fill="tozeroy",
-            fillcolor="rgba(38,222,129,0.50)",
-            line=dict(width=0),
-            showlegend=False, hoverinfo="skip",
-        ))
+        render_expiry_metrics(row)
 
-        # Solid red fill for loss zone
-        loss_y = np.where(y_pnl < 0, y_pnl, 0)
-        fig.add_trace(go.Scatter(
-            x=x_prices, y=loss_y,
-            fill="tozeroy",
-            fillcolor="rgba(255,77,77,0.50)",
-            line=dict(width=0),
-            showlegend=False, hoverinfo="skip",
-        ))
+        settle_label = f"Settlement: {settle_price:,.2f}" if settle_price > 0 else ""
+        render_payoff_chart(row, ref_price=settle_price, ref_label=settle_label)
 
-        # Thin white payoff outline on top
-        fig.add_trace(go.Scatter(
-            x=x_prices, y=y_pnl,
-            mode="lines",
-            line=dict(color="rgba(255,255,255,0.35)", width=1),
-            showlegend=False,
-            hovertemplate="מדד: %{x:,.0f}<br>P&L: %{y:,.0f} ₪<extra></extra>",
-        ))
-
-        # Zero line
-        fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.15)", width=1))
-
-        # Orange breakeven dots on the zero line
-        be_x = [v for v in [be_lower, be_upper] if v > 0]
-        if be_x:
-            fig.add_trace(go.Scatter(
-                x=be_x, y=[0] * len(be_x),
-                mode="markers",
-                marker=dict(color="#FF9800", size=10, symbol="circle",
-                            line=dict(color="#0B0D10", width=2)),
-                showlegend=False,
-                hovertemplate="Breakeven: %{x:,.0f}<extra></extra>",
-            ))
-
-        # Reference line: Settlement price or Live index
-        if is_settled:
-            ref_price = row.get("actual_index_close", 0)
-            ref_label = f"פקיעה: {ref_price:,.2f}"
-        elif live_index > 0:
-            ref_price = live_index
-            ref_label = f"נוכחי: {ref_price:,.2f}"
-        else:
-            ref_price = 0
-            ref_label = ""
-
-        if ref_price > 0:
-            fig.add_vline(
-                x=ref_price,
-                line=dict(color="#00BCD4", width=2, dash="dot"),
-            )
-            # Label at top
-            fig.add_annotation(
-                x=ref_price, y=max(y_pnl) * 0.9,
-                text=ref_label,
-                showarrow=False,
-                font=dict(size=13, color="#00BCD4", family="Inter"),
-                bgcolor="rgba(11,13,16,0.85)",
-                bordercolor="#00BCD4",
-                borderwidth=1,
-                borderpad=6,
-            )
-
-        # X-axis label
-        fig.add_annotation(
-            x=0.5, y=-0.12,
-            xref="paper", yref="paper",
-            text="שער המדד בפקיעה",
-            showarrow=False,
-            font=dict(size=12, color=C_DIM),
+        # P&L hero
+        pnl_class = "profit" if actual_pnl >= 0 else "loss"
+        glow_class = "glow-profit" if actual_pnl >= 0 else "glow-loss"
+        st.markdown(
+            f'<div class="pnl-hero {glow_class}">'
+            f'<div class="title">Settlement Result — {sel_hist_expiry} @ {sel_hist_interval:.1f}%</div>'
+            f'<div class="amount {pnl_class}">{fmt_ils(actual_pnl)}</div>'
+            f'<div style="color:{C_DIM};font-size:13px;margin-top:8px">out of max possible: {fmt_ils(max_profit)}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
-
-        fig.update_layout(
-            template="plotly_dark",
-            paper_bgcolor=C_BG,
-            plot_bgcolor=C_BG,
-            height=360,
-            margin=dict(l=50, r=30, t=20, b=50),
-            xaxis=dict(
-                gridcolor="rgba(255,255,255,0.04)",
-                zeroline=False,
-                tickformat=",",
-                tickfont=dict(size=10, color=C_DIM),
-                showgrid=True,
-                dtick=40,
-            ),
-            yaxis=dict(
-                title="(₪) רווח/הפסד",
-                gridcolor="rgba(255,255,255,0.06)",
-                zeroline=False,
-                tickformat=",",
-                tickfont=dict(size=10, color=C_DIM),
-                title_font=dict(size=11, color=C_DIM),
-                showgrid=True,
-            ),
-            showlegend=False,
-            hovermode="x unified",
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-
-# ── Render Active tab ──
-with tab_active:
-    if active_df.empty:
-        st.info("אין פוזיציות פתוחות כרגע — כל האסטרטגיות פקעו.")
-    else:
-        for _, row in active_df.iterrows():
-            render_expiry_card(row, tab_active)
-
-# ── Render History tab ──
-with tab_history:
-    if history_df.empty:
-        st.info("אין היסטוריה — אף אסטרטגיה לא פקעה עדיין.")
-    else:
-        for _, row in history_df.iterrows():
-            render_expiry_card(row, tab_history)
-
-
-# ==================================================================
-# WEEKLY AGGREGATE SUMMARY
-# ==================================================================
-st.markdown('<div class="section-hdr">📊 סיכום שבועי — כל המרווחים</div>',
-            unsafe_allow_html=True)
-
-# Get all strategies for the selected week (all intervals)
-week_mask = df["_week_label"] == selected_week
-week_df = df[week_mask].copy()
-
-if not week_df.empty:
-    # Aggregate by interval
-    agg = week_df.groupby("interval_pct").agg(
-        expiries=("expiry_date", "nunique"),
-        settled=("_is_settled", "sum"),
-        total_pnl=("actual_pnl_ils", "sum"),
-        avg_premium=("total_net_premium", "mean"),
-        max_profit=("max_profit_ils", "mean"),
-        max_risk=("max_risk_ils", "mean"),
-    ).reset_index()
-
-    # Add win count
-    settled_df = week_df[week_df["_is_settled"]]
-    if not settled_df.empty:
-        wins = settled_df[settled_df["actual_pnl_ils"] > 0].groupby(
-            "interval_pct"
-        ).size().reset_index(name="wins")
-        agg = agg.merge(wins, on="interval_pct", how="left")
-        agg["wins"] = agg["wins"].fillna(0).astype(int)
-    else:
-        agg["wins"] = 0
-
-    agg["settled"] = agg["settled"].astype(int)
-
-    # Build summary table — NO indentation (Markdown treats 4+ spaces as code block)
-    summary_html = (
-        '<div dir="ltr" class="table-container"><table class="legs-table">'
-        '<thead><tr>'
-        '<th>Interval</th><th>Expiries</th><th>Settled</th>'
-        '<th>Wins</th><th>P&L (₪)</th><th>Avg Premium</th>'
-        '<th>Avg Max Profit</th><th>Avg Max Risk</th>'
-        '</tr></thead><tbody>'
-    )
-    for _, r in agg.iterrows():
-        pnl = r["total_pnl"]
-        pnl_css = "buy" if pnl > 0 else ("sell" if pnl < 0 else "")
-        summary_html += (
-            f'<tr>'
-            f'<td><strong>{r["interval_pct"]:.1f}%</strong></td>'
-            f'<td>{int(r["expiries"])}</td>'
-            f'<td>{int(r["settled"])}</td>'
-            f'<td>{int(r["wins"])}</td>'
-            f'<td class="{pnl_css}"><strong>{fmt_ils(pnl)}</strong></td>'
-            f'<td>{fmt_num(r["avg_premium"])} pts</td>'
-            f'<td class="buy">{fmt_ils(r["max_profit"])}</td>'
-            f'<td class="sell">{fmt_ils(-abs(r["max_risk"]))}</td>'
-            f'</tr>'
-        )
-
-    # Total row
-    total = agg["total_pnl"].sum()
-    total_css = "buy" if total > 0 else ("sell" if total < 0 else "")
-    summary_html += (
-        f'<tr style="border-top:2px solid {C_BORDER};font-weight:700">'
-        f'<td>סה"כ</td>'
-        f'<td>{int(agg["expiries"].sum())}</td>'
-        f'<td>{int(agg["settled"].sum())}</td>'
-        f'<td>{int(agg["wins"].sum())}</td>'
-        f'<td class="{total_css}"><strong>{fmt_ils(total)}</strong></td>'
-        f'<td colspan="2"></td>'
-        f'<td></td>'
-        f'</tr>'
-    )
-    summary_html += '</tbody></table></div>'
-    st.markdown(summary_html, unsafe_allow_html=True)
 
 
 # ==================================================================
@@ -1011,8 +1005,8 @@ if not week_df.empty:
 # ==================================================================
 st.markdown(f"""
 <div style="text-align:center; padding:30px 0 10px; color:{C_DIM}; font-size:11px;">
-    TA-35 Iron Condor Strategy Desk — Automated Pipeline Monitor<br>
-    Data refreshes every 2 minutes &nbsp;|&nbsp; Multiplier: {MULTIPLIER}₪ per point
+    TA-35 Iron Condor Strategy Desk &mdash; Automated Pipeline<br>
+    Auto-refresh 2 min &nbsp;|&nbsp; Multiplier: {MULTIPLIER}₪/pt
     &nbsp;|&nbsp; {now_il.strftime("%H:%M:%S")} IL
 </div>
 """, unsafe_allow_html=True)
