@@ -577,26 +577,21 @@ st.markdown(f"""
 # ==================================================================
 if n_active > 0 and live_index > 0:
     idx_color = "green" if live_index >= base_index else "red"
-    st.markdown(f"""
-    <div class="metric-row">
-        <div class="metric-card glow-{"green" if idx_color == "green" else "red"}">
-            <div class="label">🔴 מדד נוכחי בשוק (פוזיציה פתוחה)</div>
-            <div class="value {idx_color}">{fmt_num(live_index)}</div>
-        </div>
-        <div class="metric-card">
-            <div class="label">📊 שינוי מכניסה</div>
-            <div class="value {"green" if live_index >= base_index else "red"}">{fmt_num(live_index - base_index)} ({(live_index - base_index) / base_index * 100:+.2f}%)</div>
-        </div>
-        <div class="metric-card">
-            <div class="label">💰 P&L מומש (settled)</div>
-            <div class="value {"green" if settled_pnl >= 0 else "red"}">{fmt_ils(settled_pnl)}</div>
-        </div>
-        <div class="metric-card">
-            <div class="label">📈 P&L צף (active)</div>
-            <div class="value {"green" if unrealized_pnl >= 0 else "red"}">{fmt_ils(unrealized_pnl)}</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    chg_color = "green" if live_index >= base_index else "red"
+    sp_color = "green" if settled_pnl >= 0 else "red"
+    up_color = "green" if unrealized_pnl >= 0 else "red"
+    glow = "green" if idx_color == "green" else "red"
+    chg_val = live_index - base_index
+    chg_pct = chg_val / base_index * 100 if base_index > 0 else 0
+    st.markdown(
+        f'<div class="metric-row">'
+        f'<div class="metric-card glow-{glow}"><div class="label">🔴 מדד נוכחי בשוק (פוזיציה פתוחה)</div><div class="value {idx_color}">{fmt_num(live_index)}</div></div>'
+        f'<div class="metric-card"><div class="label">📊 שינוי מכניסה</div><div class="value {chg_color}">{fmt_num(chg_val)} ({chg_pct:+.2f}%)</div></div>'
+        f'<div class="metric-card"><div class="label">💰 P&L מומש (settled)</div><div class="value {sp_color}">{fmt_ils(settled_pnl)}</div></div>'
+        f'<div class="metric-card"><div class="label">📈 P&L צף (active)</div><div class="value {up_color}">{fmt_ils(unrealized_pnl)}</div></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ==================================================================
@@ -645,14 +640,13 @@ for _, row in filtered.iterrows():
              row.get("long_call_id", "")),
         ]
 
-        legs_html = '<div dir="ltr">'
-        legs_html += """
-        <table class="legs-table">
-        <thead><tr>
-            <th>Leg</th><th>Action</th><th>Strike</th>
-            <th>Premium</th><th>Delta</th><th>ID</th>
-        </tr></thead><tbody>
-        """
+        legs_html = (
+            '<div dir="ltr"><table class="legs-table">'
+            '<thead><tr>'
+            '<th>Leg</th><th>Action</th><th>Strike</th>'
+            '<th>Premium</th><th>Delta</th><th>ID</th>'
+            '</tr></thead><tbody>'
+        )
         for name, action, strike, price, delta, opt_id in legs:
             css = "sell" if action == "SELL" else "buy"
             legs_html += (
@@ -677,143 +671,129 @@ for _, row in filtered.iterrows():
         be_lower = row.get("breakeven_lower", 0)
         dte = int(row.get("days_to_expiry", 0))
 
-        st.markdown(f"""
-        <div class="metric-row">
-            <div class="metric-card">
-                <div class="label">פרמיה נטו (נק')</div>
-                <div class="value {"green" if net_prem > 0 else "red"}">{fmt_num(net_prem)}</div>
-            </div>
-            <div class="metric-card">
-                <div class="label">רווח מקסימלי</div>
-                <div class="value green">{fmt_ils(max_profit)}</div>
-            </div>
-            <div class="metric-card">
-                <div class="label">הפסד מקסימלי</div>
-                <div class="value red">{fmt_ils(-abs(max_risk))}</div>
-            </div>
-            <div class="metric-card">
-                <div class="label">Risk/Reward</div>
-                <div class="value white">1:{fmt_num(rr, 1)}</div>
-            </div>
-            <div class="metric-card">
-                <div class="label">Breakeven</div>
-                <div class="value white">{fmt_num(be_lower, 0)} — {fmt_num(be_upper, 0)}</div>
-            </div>
-            <div class="metric-card">
-                <div class="label">ימים לפקיעה</div>
-                <div class="value blue">{dte}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        prem_color = "green" if net_prem > 0 else "red"
+        st.markdown(
+            f'<div class="metric-row">'
+            f'<div class="metric-card"><div class="label">פרמיה נטו (נק\')</div><div class="value {prem_color}">{fmt_num(net_prem)}</div></div>'
+            f'<div class="metric-card"><div class="label">רווח מקסימלי</div><div class="value green">{fmt_ils(max_profit)}</div></div>'
+            f'<div class="metric-card"><div class="label">הפסד מקסימלי</div><div class="value red">{fmt_ils(-abs(max_risk))}</div></div>'
+            f'<div class="metric-card"><div class="label">Risk/Reward</div><div class="value white">1:{fmt_num(rr, 1)}</div></div>'
+            f'<div class="metric-card"><div class="label">Breakeven</div><div class="value white">{fmt_num(be_lower, 0)} — {fmt_num(be_upper, 0)}</div></div>'
+            f'<div class="metric-card"><div class="label">ימים לפקיעה</div><div class="value blue">{dte}</div></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-        # ── Payoff Chart ──
+        # ── Payoff Chart (trading-desk style) ──
         x_prices, y_pnl = build_payoff_curve(row)
 
         fig = go.Figure()
 
-        # Profit zone (green fill)
-        profit_mask = y_pnl >= 0
+        # Solid green fill for profit zone
+        profit_y = np.where(y_pnl >= 0, y_pnl, 0)
         fig.add_trace(go.Scatter(
-            x=x_prices, y=np.where(profit_mask, y_pnl, 0),
+            x=x_prices, y=profit_y,
             fill="tozeroy",
-            fillcolor="rgba(0,230,118,0.10)",
+            fillcolor="rgba(0,200,100,0.55)",
             line=dict(width=0),
             showlegend=False, hoverinfo="skip",
         ))
 
-        # Loss zone (red fill)
-        loss_mask = y_pnl < 0
+        # Solid red fill for loss zone
+        loss_y = np.where(y_pnl < 0, y_pnl, 0)
         fig.add_trace(go.Scatter(
-            x=x_prices, y=np.where(loss_mask, y_pnl, 0),
+            x=x_prices, y=loss_y,
             fill="tozeroy",
-            fillcolor="rgba(255,23,68,0.10)",
+            fillcolor="rgba(220,38,38,0.55)",
             line=dict(width=0),
             showlegend=False, hoverinfo="skip",
         ))
 
-        # Main P&L line
+        # Thin white payoff outline on top
         fig.add_trace(go.Scatter(
             x=x_prices, y=y_pnl,
             mode="lines",
-            line=dict(color=C_BLUE, width=2.5),
-            name="P&L at Expiry",
-            hovertemplate="Index: %{x:,.0f}<br>P&L: %{y:,.0f} ₪<extra></extra>",
+            line=dict(color="rgba(255,255,255,0.35)", width=1),
+            showlegend=False,
+            hovertemplate="מדד: %{x:,.0f}<br>P&L: %{y:,.0f} ₪<extra></extra>",
         ))
 
         # Zero line
-        fig.add_hline(y=0, line=dict(color=C_DIM, width=1, dash="dot"))
+        fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.15)", width=1))
 
-        # Strike markers
-        for strike, label, color in [
-            (row.get("long_put_strike", 0), "LP", C_GREEN),
-            (row.get("short_put_strike", 0), "SP", C_RED),
-            (row.get("short_call_strike", 0), "SC", C_RED),
-            (row.get("long_call_strike", 0), "LC", C_GREEN),
-        ]:
-            if strike > 0:
-                fig.add_vline(
-                    x=strike,
-                    line=dict(color=color, width=1, dash="dash"),
-                    annotation_text=f"{label} {strike:.0f}",
-                    annotation_font=dict(size=10, color=color),
-                    annotation_position="top",
-                )
+        # Orange breakeven dots on the zero line
+        be_x = [v for v in [be_lower, be_upper] if v > 0]
+        if be_x:
+            fig.add_trace(go.Scatter(
+                x=be_x, y=[0] * len(be_x),
+                mode="markers",
+                marker=dict(color="#FF9800", size=10, symbol="circle",
+                            line=dict(color="#0B0D10", width=2)),
+                showlegend=False,
+                hovertemplate="Breakeven: %{x:,.0f}<extra></extra>",
+            ))
 
-        # Breakeven lines
-        for be in [be_lower, be_upper]:
-            if be > 0:
-                fig.add_vline(
-                    x=be,
-                    line=dict(color=C_DIM, width=1, dash="dot"),
-                    annotation_text=f"BE {be:.0f}",
-                    annotation_font=dict(size=9, color=C_DIM),
-                    annotation_position="bottom",
-                )
-
-        # Reference line: Settlement or Live index
+        # Reference line: Settlement price or Live index
         if is_settled:
-            actual_close = row.get("actual_index_close", 0)
-            if actual_close > 0:
-                fig.add_vline(
-                    x=actual_close,
-                    line=dict(color=C_YELLOW, width=2.5),
-                    annotation_text=f"⬤ פקיעה {actual_close:,.0f}",
-                    annotation_font=dict(size=12, color=C_YELLOW),
-                    annotation_position="top right",
-                )
+            ref_price = row.get("actual_index_close", 0)
+            ref_label = f"פקיעה: {ref_price:,.2f}"
         elif live_index > 0:
+            ref_price = live_index
+            ref_label = f"נוכחי: {ref_price:,.2f}"
+        else:
+            ref_price = 0
+            ref_label = ""
+
+        if ref_price > 0:
             fig.add_vline(
-                x=live_index,
-                line=dict(color=C_YELLOW, width=2.5, dash="dashdot"),
-                annotation_text=f"⬤ LIVE {live_index:,.0f}",
-                annotation_font=dict(size=12, color=C_YELLOW),
-                annotation_position="top right",
+                x=ref_price,
+                line=dict(color="#00BCD4", width=2, dash="dot"),
             )
+            # Label at top
+            fig.add_annotation(
+                x=ref_price, y=max(y_pnl) * 0.9,
+                text=ref_label,
+                showarrow=False,
+                font=dict(size=13, color="#00BCD4", family="Inter"),
+                bgcolor="rgba(11,13,16,0.85)",
+                bordercolor="#00BCD4",
+                borderwidth=1,
+                borderpad=6,
+            )
+
+        # X-axis label
+        fig.add_annotation(
+            x=0.5, y=-0.12,
+            xref="paper", yref="paper",
+            text="שער המדד בפקיעה",
+            showarrow=False,
+            font=dict(size=12, color=C_DIM),
+        )
 
         fig.update_layout(
             template="plotly_dark",
             paper_bgcolor=C_BG,
             plot_bgcolor=C_BG,
-            height=380,
-            margin=dict(l=50, r=30, t=30, b=40),
+            height=360,
+            margin=dict(l=50, r=30, t=20, b=50),
             xaxis=dict(
-                title="TA-35 Index",
-                gridcolor=C_GRID,
+                gridcolor="rgba(255,255,255,0.04)",
                 zeroline=False,
                 tickformat=",",
-                title_font=dict(size=12, color=C_DIM),
+                tickfont=dict(size=10, color=C_DIM),
+                showgrid=True,
+                dtick=40,
             ),
             yaxis=dict(
-                title="P&L (₪)",
-                gridcolor=C_GRID,
+                title="(₪) רווח/הפסד",
+                gridcolor="rgba(255,255,255,0.06)",
                 zeroline=False,
                 tickformat=",",
-                title_font=dict(size=12, color=C_DIM),
+                tickfont=dict(size=10, color=C_DIM),
+                title_font=dict(size=11, color=C_DIM),
+                showgrid=True,
             ),
-            legend=dict(
-                bgcolor="rgba(0,0,0,0)",
-                font=dict(size=11),
-            ),
+            showlegend=False,
             hovermode="x unified",
         )
 
@@ -854,46 +834,46 @@ if not week_df.empty:
 
     agg["settled"] = agg["settled"].astype(int)
 
-    # Build summary table
-    summary_html = """
-    <div dir="ltr"><table class="legs-table">
-    <thead><tr>
-        <th>Interval</th><th>Expiries</th><th>Settled</th>
-        <th>Wins</th><th>P&L (₪)</th><th>Avg Premium</th>
-        <th>Avg Max Profit</th><th>Avg Max Risk</th>
-    </tr></thead><tbody>
-    """
+    # Build summary table — NO indentation (Markdown treats 4+ spaces as code block)
+    summary_html = (
+        '<div dir="ltr"><table class="legs-table">'
+        '<thead><tr>'
+        '<th>Interval</th><th>Expiries</th><th>Settled</th>'
+        '<th>Wins</th><th>P&L (₪)</th><th>Avg Premium</th>'
+        '<th>Avg Max Profit</th><th>Avg Max Risk</th>'
+        '</tr></thead><tbody>'
+    )
     for _, r in agg.iterrows():
         pnl = r["total_pnl"]
         pnl_css = "buy" if pnl > 0 else ("sell" if pnl < 0 else "")
-        summary_html += f"""
-        <tr>
-            <td><strong>{r['interval_pct']:.1f}%</strong></td>
-            <td>{int(r['expiries'])}</td>
-            <td>{int(r['settled'])}</td>
-            <td>{int(r['wins'])}</td>
-            <td class="{pnl_css}"><strong>{fmt_ils(pnl)}</strong></td>
-            <td>{fmt_num(r['avg_premium'])} pts</td>
-            <td class="buy">{fmt_ils(r['max_profit'])}</td>
-            <td class="sell">{fmt_ils(-abs(r['max_risk']))}</td>
-        </tr>
-        """
+        summary_html += (
+            f'<tr>'
+            f'<td><strong>{r["interval_pct"]:.1f}%</strong></td>'
+            f'<td>{int(r["expiries"])}</td>'
+            f'<td>{int(r["settled"])}</td>'
+            f'<td>{int(r["wins"])}</td>'
+            f'<td class="{pnl_css}"><strong>{fmt_ils(pnl)}</strong></td>'
+            f'<td>{fmt_num(r["avg_premium"])} pts</td>'
+            f'<td class="buy">{fmt_ils(r["max_profit"])}</td>'
+            f'<td class="sell">{fmt_ils(-abs(r["max_risk"]))}</td>'
+            f'</tr>'
+        )
 
     # Total row
     total = agg["total_pnl"].sum()
     total_css = "buy" if total > 0 else ("sell" if total < 0 else "")
-    summary_html += f"""
-    <tr style="border-top:2px solid {C_BORDER};font-weight:700">
-        <td>סה"כ</td>
-        <td>{int(agg['expiries'].sum())}</td>
-        <td>{int(agg['settled'].sum())}</td>
-        <td>{int(agg['wins'].sum())}</td>
-        <td class="{total_css}"><strong>{fmt_ils(total)}</strong></td>
-        <td colspan="2"></td>
-        <td></td>
-    </tr>
-    """
-    summary_html += "</tbody></table></div>"
+    summary_html += (
+        f'<tr style="border-top:2px solid {C_BORDER};font-weight:700">'
+        f'<td>סה"כ</td>'
+        f'<td>{int(agg["expiries"].sum())}</td>'
+        f'<td>{int(agg["settled"].sum())}</td>'
+        f'<td>{int(agg["wins"].sum())}</td>'
+        f'<td class="{total_css}"><strong>{fmt_ils(total)}</strong></td>'
+        f'<td colspan="2"></td>'
+        f'<td></td>'
+        f'</tr>'
+    )
+    summary_html += '</tbody></table></div>'
     st.markdown(summary_html, unsafe_allow_html=True)
 
 
