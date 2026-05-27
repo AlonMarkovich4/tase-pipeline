@@ -613,10 +613,11 @@ def render_legs_table(row):
         ("Short Call", "SELL", row.get("short_call_strike", 0), row.get("short_call_price", 0)),
         ("Long Call", "BUY", row.get("long_call_strike", 0), row.get("long_call_price", 0)),
     ]
-    html = '<div class="table-scroll"><table><thead><tr><th>Leg</th><th>Action</th><th>Strike</th><th>Premium (pts)</th></tr></thead><tbody>'
+    html = '<div class="table-scroll"><table><thead><tr><th>Leg</th><th>Action</th><th>Strike</th><th>Premium (₪)</th></tr></thead><tbody>'
     for name, action, strike, price in legs:
         css = "sell" if action == "SELL" else "buy"
-        html += f'<tr><td>{name}</td><td class="{css}">{action}</td><td><strong>{fmt_num(strike, 0)}</strong></td><td>{fmt_num(price)}</td></tr>'
+        price_ils = price * MULTIPLIER  # Convert points → ₪ for display
+        html += f'<tr><td>{name}</td><td class="{css}">{action}</td><td><strong>{fmt_num(strike, 0)}</strong></td><td>{fmt_num(price_ils, 0)}</td></tr>'
     html += "</tbody></table></div>"
     st.markdown(html, unsafe_allow_html=True)
 
@@ -751,21 +752,40 @@ st.markdown(
 
 
 # ==================================================================
-# TABS
+# SIDEBAR NAVIGATION
 # ==================================================================
 all_active = week_all[~week_all["_is_settled"]]
 all_history = week_all[week_all["_is_settled"]]
 
-tab_active, tab_history = st.tabs([
-    f"🔵 Open Positions ({len(all_active)})",
-    f"📜 History ({len(all_history)})",
-])
+with st.sidebar:
+    st.markdown(f"""
+    <div style="text-align:center;padding:18px 0 14px;">
+        <div style="font-size:22px;font-weight:800;color:{C_TEXT};letter-spacing:-0.5px;">◆ Strategy Desk</div>
+        <div style="font-size:11px;color:{C_DIM};margin-top:4px;">TA-35 Iron Condor</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    nav_page = st.radio(
+        "ניווט",
+        ["🔵 Open Positions", "📜 History"],
+        captions=[f"{len(all_active)} פוזיציות פתוחות", f"{len(all_history)} אסטרטגיות שפקעו"],
+        label_visibility="collapsed",
+    )
+
+    st.markdown(f"""
+    <div style="border-top:1px solid {C_BORDER};margin:16px 0;padding-top:14px;">
+        <div style="color:{C_DIM};font-size:11px;text-align:center;">
+            Auto-refresh 2 min<br>Multiplier: {MULTIPLIER}₪/pt
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # ==================================================================
-# ACTIVE TAB — Week → Expiry → Interval
+# ACTIVE PAGE — Week → Expiry → Interval
 # ==================================================================
-with tab_active:
+if nav_page == "🔵 Open Positions":
+    # ── Active tab content ──
     if all_active.empty:
         st.info("אין פוזיציות פתוחות כרגע — כל האסטרטגיות של השבוע פקעו.")
     else:
@@ -862,9 +882,9 @@ with tab_active:
 
 
 # ==================================================================
-# HISTORY TAB — Week → Expiry → Interval
+# HISTORY PAGE — Week → Expiry → Interval
 # ==================================================================
-with tab_history:
+elif nav_page == "📜 History":
     if all_history.empty:
         st.info("אין היסטוריה — אף אסטרטגיה לא פקעה עדיין.")
     else:
