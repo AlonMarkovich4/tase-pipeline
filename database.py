@@ -90,7 +90,8 @@ def test_connection() -> bool:
 
 # ------------------------------------------------------------------
 def _clear_table() -> bool:
-    """Delete ALL rows from the table (keep only latest snapshot)."""
+    """Delete ALL rows from the table (keep only latest snapshot).
+    DEPRECATED — use _clear_old_snapshots() after successful write instead."""
     _ensure_init()
     url = f"{_base_url}/rest/v1/{_table}?id=gt.0"
     try:
@@ -102,6 +103,26 @@ def _clear_table() -> bool:
                        r.status_code, r.text[:200])
     except Exception as e:
         logger.warning("Clear table failed: %s", e)
+    return False
+
+
+def _clear_old_snapshots(keep_date: str, keep_time: str) -> bool:
+    """Delete rows from previous snapshots, keeping only the current one.
+    Safe: only runs after successful write, so data is never lost."""
+    _ensure_init()
+    # Delete rows that don't match the current fetch_date+fetch_time
+    url = (f"{_base_url}/rest/v1/{_table}"
+           f"?or=(fetch_date.neq.{keep_date},fetch_time.neq.{keep_time})")
+    try:
+        r = httpx.delete(url, headers=_headers(), timeout=15)
+        if r.status_code in (200, 204):
+            logger.info("Cleared old snapshots (keeping %s %s)",
+                        keep_date, keep_time)
+            return True
+        logger.warning("Clear old snapshots returned %d: %s",
+                       r.status_code, r.text[:200])
+    except Exception as e:
+        logger.warning("Clear old snapshots failed: %s", e)
     return False
 
 
@@ -239,8 +260,10 @@ def copy_to_history(max_retries: int = 3) -> bool:
         row.pop("id", None)
         row.pop("fetched_at", None)
 
-    # 3. Insert into history table in batches
-    write_url = f"{_base_url}/rest/v1/{_history_table}"
+    # 3. Insert into history table in batches (UPSERT to prevent duplicates)
+    write_url = (f"{_base_url}/rest/v1/{_history_table}"
+                 f"?on_conflict=fetch_date,fetch_time,expiry_date,"
+                 f"derivativeid_call,derivativeid_put")
     total_ok = 0
 
     for i in range(0, len(rows), BATCH_SIZE):
@@ -249,7 +272,9 @@ def copy_to_history(max_retries: int = 3) -> bool:
 
         for attempt in range(1, max_retries + 1):
             try:
-                r = httpx.post(write_url, headers=_headers(),
+                h = _headers()
+                h["Prefer"] = "resolution=merge-duplicates"
+                r = httpx.post(write_url, headers=h,
                                content=payload, timeout=30)
                 if r.status_code in (200, 201, 204):
                     total_ok += len(batch)

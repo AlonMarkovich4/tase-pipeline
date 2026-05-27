@@ -27,7 +27,12 @@ st.set_page_config(
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 TZ = ZoneInfo("Asia/Jerusalem")
-MULTIPLIER = 50
+
+# Import multiplier from shared config (single source of truth)
+try:
+    from config import TASE_MULTIPLIER as MULTIPLIER
+except ImportError:
+    MULTIPLIER = 50
 
 # Palette — high-contrast dark theme
 C_BG       = "#0B0D10"
@@ -464,14 +469,17 @@ def fmt_num(v: float, decimals: int = 2) -> str:
 
 
 @st.cache_data(ttl=60)
-def _fetch_current_option_price(derivative_id: str, side: str) -> float:
-    if not derivative_id or not SUPABASE_URL:
+def _fetch_current_option_price(strike: float, expiry_date: str, side: str) -> float:
+    """Fetch current price for an option by strike + expiry (not by derivative ID).
+    This is safe even when the live table only holds the latest snapshot."""
+    if not strike or not expiry_date or not SUPABASE_URL:
         return 0.0
-    col_id = f"derivativeid_{side}"
+    col_strike = f"expirationprice_{side}"
     col_price = f"lastrate_{side}"
     url = (
         f"{SUPABASE_URL}/rest/v1/tase_putcall"
-        f"?{col_id}=eq.{derivative_id}"
+        f"?{col_strike}=eq.{strike}"
+        f"&expiry_date=eq.{expiry_date}"
         f"&select={col_price}"
         f"&order=id.desc&limit=1"
     )
@@ -494,25 +502,23 @@ def _fetch_current_option_price(derivative_id: str, side: str) -> float:
 
 def compute_unrealized_pnl(row: pd.Series, live_index: float) -> tuple:
     entry_premium = row.get("total_net_premium", 0)
-    sc_id = str(row.get("short_call_id", ""))
-    sp_id = str(row.get("short_put_id", ""))
-    lc_id = str(row.get("long_call_id", ""))
-    lp_id = str(row.get("long_put_id", ""))
+    expiry = str(row.get("expiry_date", ""))
 
-    sc_now = _fetch_current_option_price(sc_id, "call") if sc_id else 0
-    sp_now = _fetch_current_option_price(sp_id, "put") if sp_id else 0
-    lc_now = _fetch_current_option_price(lc_id, "call") if lc_id else 0
-    lp_now = _fetch_current_option_price(lp_id, "put") if lp_id else 0
+    sc_strike = row.get("short_call_strike", 0)
+    sp_strike = row.get("short_put_strike", 0)
+    lc_strike = row.get("long_call_strike", 0)
+    lp_strike = row.get("long_put_strike", 0)
+
+    sc_now = _fetch_current_option_price(sc_strike, expiry, "call") if sc_strike else 0
+    sp_now = _fetch_current_option_price(sp_strike, expiry, "put") if sp_strike else 0
+    lc_now = _fetch_current_option_price(lc_strike, expiry, "call") if lc_strike else 0
+    lp_now = _fetch_current_option_price(lp_strike, expiry, "put") if lp_strike else 0
 
     if sc_now > 0 or sp_now > 0:
         current_premium = (sc_now + sp_now) - (lc_now + lp_now)
         pnl_pts = entry_premium - current_premium
         return round(pnl_pts * MULTIPLIER, 2), "live"
 
-    sp_strike = row.get("short_put_strike", 0)
-    sc_strike = row.get("short_call_strike", 0)
-    lp_strike = row.get("long_put_strike", 0)
-    lc_strike = row.get("long_call_strike", 0)
     wing_put = row.get("actual_wing_put", 0) or (sp_strike - lp_strike) or 20
     wing_call = row.get("actual_wing_call", 0) or (lc_strike - sc_strike) or 20
 
@@ -776,6 +782,15 @@ with st.sidebar:
     <div style="border-top:1px solid {C_BORDER};margin:16px 0;padding-top:14px;">
         <div style="color:{C_DIM};font-size:11px;text-align:center;">
             Auto-refresh 2 min<br>Multiplier: {MULTIPLIER}₪/pt
+        </div>
+        <div style="text-align:center;margin-top:12px;">
+            <a href="/demo_trading" target="_self"
+               style="display:inline-block;background:rgba(0,176,255,0.12);
+               color:{C_BLUE};border:1px solid rgba(0,176,255,0.25);
+               border-radius:8px;padding:8px 16px;font-size:13px;
+               font-weight:700;text-decoration:none;">
+               🕹️ זירת מסחר דמו
+            </a>
         </div>
     </div>
     """, unsafe_allow_html=True)

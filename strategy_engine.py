@@ -90,8 +90,15 @@ def _read_live_data() -> list:
     return all_rows
 
 
+_yahoo_cache: dict = {}
+
+
 def _fetch_yahoo_meta() -> dict:
-    """Fetch TA-35 meta from Yahoo Finance (price, open, etc.)."""
+    """Fetch TA-35 meta from Yahoo Finance (price, open, etc.).
+    Cached for the lifetime of the process to avoid duplicate calls."""
+    if _yahoo_cache:
+        return _yahoo_cache
+
     url = ("https://query1.finance.yahoo.com/v8/finance/chart/TA35.TA"
            "?interval=1d&range=1d")
     try:
@@ -103,6 +110,7 @@ def _fetch_yahoo_meta() -> dict:
             meta = (data.get("chart", {})
                         .get("result", [{}])[0]
                         .get("meta", {}))
+            _yahoo_cache.update(meta)
             return meta
     except Exception as e:
         logger.warning("Yahoo Finance fetch failed: %s", e)
@@ -126,12 +134,10 @@ def _fetch_settlement_price() -> float:
     Yahoo Finance 'regularMarketOpen' is the closest available proxy.
     """
     meta = _fetch_yahoo_meta()
-    # Prefer opening price (settlement proxy)
     open_price = meta.get("regularMarketOpen", 0)
     if open_price and open_price > 0:
         logger.info("Settlement price (Yahoo open): %.2f", open_price)
         return float(open_price)
-    # Fallback to current price
     price = meta.get("regularMarketPrice", 0)
     if price and price > 0:
         logger.warning("Settlement fallback to market price: %.2f", price)

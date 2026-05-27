@@ -30,7 +30,7 @@ from config import (
 # ------------------------------------------------------------------
 # Config (local to pipeline)
 # ------------------------------------------------------------------
-HEADLESS        = True
+HEADLESS        = os.environ.get("HEADLESS", "true").lower() == "true"
 FETCH_INTERVAL  = int(os.environ.get("FETCH_INTERVAL_MINUTES",
                                       str(FETCH_INTERVAL_MINUTES))) * 60
 PAGE_TIMEOUT    = 45_000
@@ -375,9 +375,6 @@ def run_cycle(page, cycle_time: datetime):
     logger.info("Expiry dates: %s",
                 [d.isoformat() for d in expiry_dates])
 
-    # Clear table ONCE before writing all expiry dates
-    db._clear_table()
-
     success_count = 0
     total_rows = 0
 
@@ -427,6 +424,10 @@ def run_cycle(page, cycle_time: datetime):
 
         if idx < len(expiry_dates) - 1:
             time.sleep(random.uniform(3, 5))
+
+    # Clean up old snapshots only after successful write
+    if success_count > 0:
+        db._clear_old_snapshots(date_str, time_str)
 
     return {
         "ok": success_count > 0,
