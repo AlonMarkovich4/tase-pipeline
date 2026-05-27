@@ -84,7 +84,7 @@ html, body, [class*="css"] {{
 }}
 
 /* ── Metric Cards ── */
-.metric-row {{
+.metric-grid {{
     display: flex;
     gap: 14px;
     margin: 16px 0;
@@ -576,7 +576,7 @@ else:
     status_html = '<span class="badge active">🔵 PARTIALLY ACTIVE</span>'
 
 st.markdown(f"""
-<div class="metric-row">
+<div class="metric-grid">
     <div class="metric-card">
         <div class="label">📅 תאריך הרצה</div>
         <div class="value white">{trigger_date}</div>
@@ -634,7 +634,7 @@ for pct in sorted(week_all["interval_pct"].unique()):
 
 # Build compact P&L table for all intervals
 pnl_table = (
-    '<div dir="ltr"><table class="legs-table">'
+    '<div dir="ltr" class="table-container"><table class="legs-table">'
     '<thead><tr>'
     '<th>מרווח</th><th>פקיעות</th>'
     '<th>P&L מומש</th><th>P&L צף</th><th>סה"כ</th>'
@@ -648,7 +648,7 @@ for ip in interval_pnl_rows:
     t_css = "buy" if total > 0 else ("sell" if total < 0 else "")
     s_css = "buy" if ip["settled_pnl"] > 0 else ("sell" if ip["settled_pnl"] < 0 else "")
     u_css = "buy" if ip["unrealized_pnl"] > 0 else ("sell" if ip["unrealized_pnl"] < 0 else "")
-    highlight = ' style="background:rgba(0,176,255,0.08)"' if pct == selected_interval else ""
+    highlight = ' style="background:rgba(47,128,237,0.10)"' if pct == selected_interval else ""
     status = f'{ip["n_settled"]}✅ {ip["n_active"]}🔵' if ip["n_active"] > 0 else f'{ip["n_settled"]}✅'
     pnl_table += (
         f'<tr{highlight}>'
@@ -687,7 +687,7 @@ if n_active > 0 and live_index > 0:
     chg_val = live_index - base_index
     chg_pct = chg_val / base_index * 100 if base_index > 0 else 0
     st.markdown(
-        f'<div class="metric-row">'
+        f'<div class="metric-grid">'
         f'<div class="metric-card glow-{glow}"><div class="label">🔴 מדד נוכחי בשוק (פוזיציה פתוחה)</div><div class="value {idx_color}">{fmt_num(live_index)}</div></div>'
         f'<div class="metric-card"><div class="label">📊 שינוי מכניסה</div><div class="value {chg_color}">{fmt_num(chg_val)} ({chg_pct:+.2f}%)</div></div>'
         f'<div class="metric-card"><div class="label">💰 P&L מומש (settled)</div><div class="value {sp_color}">{fmt_ils(settled_pnl)}</div></div>'
@@ -753,7 +753,7 @@ def render_expiry_card(row, container):
         ]
 
         legs_html = (
-            '<div dir="ltr"><table class="legs-table">'
+            '<div dir="ltr" class="table-container"><table class="legs-table">'
             '<thead><tr>'
             '<th>Leg</th><th>Action</th><th>Strike</th>'
             '<th>Premium</th><th>Delta</th><th>ID</th>'
@@ -785,7 +785,7 @@ def render_expiry_card(row, container):
 
         prem_color = "green" if net_prem > 0 else "red"
         st.markdown(
-            f'<div class="metric-row">'
+            f'<div class="metric-grid">'
             f'<div class="metric-card"><div class="label">פרמיה נטו (נק\')</div><div class="value {prem_color}">{fmt_num(net_prem)}</div></div>'
             f'<div class="metric-card"><div class="label">רווח מקסימלי</div><div class="value green">{fmt_ils(max_profit)}</div></div>'
             f'<div class="metric-card"><div class="label">הפסד מקסימלי</div><div class="value red">{fmt_ils(-abs(max_risk))}</div></div>'
@@ -806,7 +806,7 @@ def render_expiry_card(row, container):
         fig.add_trace(go.Scatter(
             x=x_prices, y=profit_y,
             fill="tozeroy",
-            fillcolor="rgba(0,200,100,0.55)",
+            fillcolor="rgba(38,222,129,0.50)",
             line=dict(width=0),
             showlegend=False, hoverinfo="skip",
         ))
@@ -816,7 +816,7 @@ def render_expiry_card(row, container):
         fig.add_trace(go.Scatter(
             x=x_prices, y=loss_y,
             fill="tozeroy",
-            fillcolor="rgba(220,38,38,0.55)",
+            fillcolor="rgba(255,77,77,0.50)",
             line=dict(width=0),
             showlegend=False, hoverinfo="skip",
         ))
@@ -965,7 +965,7 @@ if not week_df.empty:
 
     # Build summary table — NO indentation (Markdown treats 4+ spaces as code block)
     summary_html = (
-        '<div dir="ltr"><table class="legs-table">'
+        '<div dir="ltr" class="table-container"><table class="legs-table">'
         '<thead><tr>'
         '<th>Interval</th><th>Expiries</th><th>Settled</th>'
         '<th>Wins</th><th>P&L (₪)</th><th>Avg Premium</th>'
