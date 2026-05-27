@@ -483,7 +483,8 @@ def _fetch_current_option_price(derivative_id: str, side: str) -> float:
                 val = rows[0].get(col_price, 0)
                 if val is not None:
                     try:
-                        return float(str(val).replace(",", ""))
+                        # TASE lastrate is in ₪/contract — divide by multiplier for points
+                        return float(str(val).replace(",", "")) / MULTIPLIER
                     except (ValueError, TypeError):
                         pass
     except Exception:
@@ -607,15 +608,15 @@ def render_payoff_chart(row, ref_price: float = 0, ref_label: str = ""):
 
 def render_legs_table(row):
     legs = [
-        ("Long Put", "BUY", row.get("long_put_strike", 0), row.get("long_put_price", 0), row.get("long_put_delta", 0), row.get("long_put_id", "")),
-        ("Short Put", "SELL", row.get("short_put_strike", 0), row.get("short_put_price", 0), row.get("short_put_delta", 0), row.get("short_put_id", "")),
-        ("Short Call", "SELL", row.get("short_call_strike", 0), row.get("short_call_price", 0), row.get("short_call_delta", 0), row.get("short_call_id", "")),
-        ("Long Call", "BUY", row.get("long_call_strike", 0), row.get("long_call_price", 0), row.get("long_call_delta", 0), row.get("long_call_id", "")),
+        ("Long Put", "BUY", row.get("long_put_strike", 0), row.get("long_put_price", 0)),
+        ("Short Put", "SELL", row.get("short_put_strike", 0), row.get("short_put_price", 0)),
+        ("Short Call", "SELL", row.get("short_call_strike", 0), row.get("short_call_price", 0)),
+        ("Long Call", "BUY", row.get("long_call_strike", 0), row.get("long_call_price", 0)),
     ]
-    html = '<div class="table-scroll"><table><thead><tr><th>Leg</th><th>Action</th><th>Strike</th><th>Premium</th><th>Delta</th><th>ID</th></tr></thead><tbody>'
-    for name, action, strike, price, delta, opt_id in legs:
+    html = '<div class="table-scroll"><table><thead><tr><th>Leg</th><th>Action</th><th>Strike</th><th>Premium (pts)</th></tr></thead><tbody>'
+    for name, action, strike, price in legs:
         css = "sell" if action == "SELL" else "buy"
-        html += f'<tr><td>{name}</td><td class="{css}">{action}</td><td><strong>{fmt_num(strike, 0)}</strong></td><td>{fmt_num(price)}</td><td>{fmt_num(delta, 4)}</td><td style="color:{C_DIM};font-size:11px">{opt_id}</td></tr>'
+        html += f'<tr><td>{name}</td><td class="{css}">{action}</td><td><strong>{fmt_num(strike, 0)}</strong></td><td>{fmt_num(price)}</td></tr>'
     html += "</tbody></table></div>"
     st.markdown(html, unsafe_allow_html=True)
 
@@ -624,18 +625,26 @@ def render_expiry_metrics(row):
     net_prem = row.get("total_net_premium", 0)
     max_profit = row.get("max_profit_ils", 0)
     max_risk = row.get("max_risk_ils", 0)
-    rr = row.get("risk_reward_ratio", 0)
+    rr = abs(row.get("risk_reward_ratio", 0))
     be_upper = row.get("breakeven_upper", 0)
     be_lower = row.get("breakeven_lower", 0)
     dte = int(row.get("days_to_expiry", 0))
     prem_color = "green" if net_prem > 0 else "red"
+    # Row 1: P&L range
     st.markdown(
         f'<div class="metric-grid">'
         f'<div class="metric-card"><div class="label">Net Premium (pts)</div><div class="value {prem_color}">{fmt_num(net_prem)}</div></div>'
-        f'<div class="metric-card"><div class="label">Max Profit</div><div class="value green">{fmt_ils(max_profit)}</div></div>'
-        f'<div class="metric-card"><div class="label">Max Risk</div><div class="value red">{fmt_ils(-abs(max_risk))}</div></div>'
+        f'<div class="metric-card glow-green"><div class="label">Max Profit</div><div class="value green">{fmt_ils(max_profit)}</div></div>'
+        f'<div class="metric-card glow-red"><div class="label">Max Risk</div><div class="value red">{fmt_ils(-abs(max_risk))}</div></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    # Row 2: Structure
+    st.markdown(
+        f'<div class="metric-grid">'
         f'<div class="metric-card"><div class="label">Risk / Reward</div><div class="value white">1:{fmt_num(rr, 1)}</div></div>'
-        f'<div class="metric-card"><div class="label">Breakeven</div><div class="value white">{fmt_num(be_lower, 0)} — {fmt_num(be_upper, 0)}</div></div>'
+        f'<div class="metric-card"><div class="label">Lower Breakeven</div><div class="value white">{fmt_num(be_lower, 0)}</div></div>'
+        f'<div class="metric-card"><div class="label">Upper Breakeven</div><div class="value white">{fmt_num(be_upper, 0)}</div></div>'
         f'<div class="metric-card"><div class="label">DTE</div><div class="value blue">{dte}</div></div>'
         f'</div>',
         unsafe_allow_html=True,
@@ -683,6 +692,11 @@ df["_week_label"] = df.apply(
 )
 df["_is_settled"] = df["result_status"].notna() & (df["result_status"] != "")
 
+# Expired but never settled → treat as settled (missed settlement)
+today_str = now_il.strftime("%Y-%m-%d")
+df["_is_expired"] = (df["expiry_date"] < today_str) & (~df["_is_settled"])
+df.loc[df["_is_expired"], "_is_settled"] = True
+
 week_options = (
     df[["_week_label", "_trigger_dt"]]
     .drop_duplicates("_week_label")
@@ -722,7 +736,7 @@ if n_active_week == 0:
 elif n_settled_week == 0:
     week_status = '<span class="badge active">ACTIVE</span>'
 else:
-    week_status = '<span class="badge active">PARTIAL</span>'
+    week_status = '<span class="badge active">PARTIALLY ACTIVE</span>'
 
 st.markdown(
     f'<div class="metric-grid">'

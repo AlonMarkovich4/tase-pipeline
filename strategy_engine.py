@@ -226,7 +226,9 @@ def _find_closest_option(rows: list, target_strike: float,
             continue
         if strike in exclude_strikes:
             continue
-        price = _clean_numeric(row.get(price_col))
+        # TASE API returns lastrate in ₪ per contract (points × multiplier)
+        # Divide by multiplier to convert to index points
+        price = _clean_numeric(row.get(price_col)) / TASE_MULTIPLIER
         diff = abs(strike - target_strike)
 
         # Track closest with a real price
