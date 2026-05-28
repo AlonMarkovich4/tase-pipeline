@@ -32,9 +32,14 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 TZ = ZoneInfo("Asia/Jerusalem")
 
 try:
-    from config import TASE_MULTIPLIER as MULTIPLIER
+    from config import TASE_MULTIPLIER as MULTIPLIER, WING_WIDTH
 except ImportError:
     MULTIPLIER = 50
+    WING_WIDTH = 20
+
+# ── Demo trading constants ──
+DEMO_INITIAL_BALANCE = 100_000.0
+STRATEGY_LOOKBACK_DAYS = 90  # how far back to load strategies (perf)
 
 # Palette
 C_BG       = "#0B0D10"
@@ -440,18 +445,28 @@ div[data-baseweb="select"] {{
 # DATA LAYER — Strategy Desk
 # ==================================================================
 
+_HEADERS_CACHE: dict | None = None
+
+
 def _supabase_headers() -> dict:
-    return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-    }
+    """Cached headers — credentials don't change at runtime."""
+    global _HEADERS_CACHE
+    if _HEADERS_CACHE is None:
+        _HEADERS_CACHE = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+        }
+    return _HEADERS_CACHE
 
 
 @st.cache_data(ttl=120)
 def load_strategies() -> pd.DataFrame:
     if not SUPABASE_URL or not SUPABASE_KEY:
         return pd.DataFrame()
+    # Lookback window for performance — only load recent strategies
+    cutoff = (datetime.now(TZ).date()
+              - pd.Timedelta(days=STRATEGY_LOOKBACK_DAYS)).isoformat()
     all_rows = []
     batch = 1000
     offset = 0
@@ -459,6 +474,7 @@ def load_strategies() -> pd.DataFrame:
         url = (
             f"{SUPABASE_URL}/rest/v1/iron_condor_strategies"
             f"?select=*&order=trigger_date.desc,expiry_date,interval_pct"
+            f"&trigger_date=gte.{cutoff}"
             f"&limit={batch}&offset={offset}"
         )
         try:
@@ -494,6 +510,32 @@ def load_strategies() -> pd.DataFrame:
     for c in num_cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+
+    # ------------------------------------------------------------------
+    # POST-LOAD VALIDATION: enforce Iron Condor pricing invariants
+    # Premium can never exceed wing width — cap and flag corrupted rows
+    # ------------------------------------------------------------------
+    if "total_net_premium" in df.columns:
+        wing_p = df.get("actual_wing_put", pd.Series(WING_WIDTH, index=df.index))
+        wing_c = df.get("actual_wing_call", pd.Series(WING_WIDTH, index=df.index))
+        wing_p = wing_p.replace(0, WING_WIDTH)
+        wing_c = wing_c.replace(0, WING_WIDTH)
+        wing_max = pd.concat([wing_p, wing_c], axis=1).max(axis=1)
+
+        # Flag rows where premium > wing (impossible)
+        corrupted = df["total_net_premium"] > wing_max
+        if corrupted.any():
+            df.loc[corrupted, "premium_flag"] = "price_capped"
+            df.loc[corrupted, "total_net_premium"] = wing_max[corrupted]
+            # Recalculate profit/risk from corrected premium
+            df.loc[corrupted, "max_profit_ils"] = (
+                df.loc[corrupted, "total_net_premium"] * MULTIPLIER
+            )
+            df.loc[corrupted, "max_risk_ils"] = (
+                wing_max[corrupted] * MULTIPLIER
+                - df.loc[corrupted, "max_profit_ils"]
+            )
+
     return df
 
 
@@ -580,6 +622,7 @@ def load_option_chain(expiry_date: str) -> pd.DataFrame:
                  "openpositions_put", "dealsno_call", "dealsno_put", "strike"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    df = df[df["strike"] > 0]  # Filter out rows with missing/zero strikes
     return df.sort_values("strike").reset_index(drop=True)
 
 
@@ -603,7 +646,7 @@ def get_available_expiries() -> list:
 
 def get_demo_balance() -> float:
     if not SUPABASE_URL or not SUPABASE_KEY:
-        return 100_000.0
+        return DEMO_INITIAL_BALANCE
     url = f"{SUPABASE_URL}/rest/v1/demo_balance?select=balance&order=id.desc&limit=1"
     try:
         r = httpx.get(url, headers=_supabase_headers(), timeout=10)
@@ -611,7 +654,7 @@ def get_demo_balance() -> float:
             return float(r.json()[0]["balance"])
     except Exception:
         pass
-    return 100_000.0
+    return DEMO_INITIAL_BALANCE
 
 
 def _update_demo_balance(new_balance: float, change: float, reason: str):
@@ -671,8 +714,10 @@ def close_demo_trade(trade_id: str, settlement_index: float,
 # ==================================================================
 
 def fmt_ils(v: float) -> str:
-    sign = "+" if v > 0 else ""
-    return f"{sign}{v:,.0f} ₪"
+    # Explicit sign for positive values; native "-" for negatives; no sign for 0
+    if v > 0:
+        return f"+{v:,.0f} ₪"
+    return f"{v:,.0f} ₪"
 
 
 def fmt_num(v: float, decimals: int = 2) -> str:
@@ -680,32 +725,61 @@ def fmt_num(v: float, decimals: int = 2) -> str:
 
 
 @st.cache_data(ttl=60)
-def _fetch_current_option_price(strike: float, expiry_date: str, side: str) -> float:
-    if not strike or not expiry_date or not SUPABASE_URL:
-        return 0.0
-    col_strike = f"expirationprice_{side}"
-    col_price = f"lastrate_{side}"
-    url = (
+def _fetch_option_prices_for_expiry(expiry_date: str) -> dict:
+    """
+    Batch fetch ALL latest option prices for one expiry in a single HTTP call.
+    Returns: {(strike, side): price_in_pts}
+    Replaces N individual fetches with 1 query — major perf win for the
+    Open Positions page where every interval needs 4 leg prices.
+
+    Sanity: drops prices > WING_WIDTH * 3 (corrupted theoretical TASE values).
+    """
+    if not expiry_date or not SUPABASE_URL:
+        return {}
+    # First get latest fetch_date+fetch_time for this expiry
+    url_latest = (
         f"{SUPABASE_URL}/rest/v1/tase_putcall"
-        f"?{col_strike}=eq.{strike}"
+        f"?select=fetch_date,fetch_time"
         f"&expiry_date=eq.{expiry_date}"
-        f"&select={col_price}"
         f"&order=id.desc&limit=1"
     )
     try:
-        r = httpx.get(url, headers=_supabase_headers(), timeout=10)
-        if r.status_code in (200, 206):
-            rows = r.json()
-            if rows:
-                val = rows[0].get(col_price, 0)
-                if val is not None:
-                    try:
-                        return float(str(val).replace(",", "")) / MULTIPLIER
-                    except (ValueError, TypeError):
-                        pass
+        r = httpx.get(url_latest, headers=_supabase_headers(), timeout=10)
+        if r.status_code not in (200, 206) or not r.json():
+            return {}
+        latest = r.json()[0]
+        fd, ft = latest["fetch_date"], latest["fetch_time"]
+    except Exception:
+        return {}
+
+    url = (
+        f"{SUPABASE_URL}/rest/v1/tase_putcall"
+        f"?select=expirationprice_call,lastrate_call,"
+        f"expirationprice_put,lastrate_put"
+        f"&expiry_date=eq.{expiry_date}"
+        f"&fetch_date=eq.{fd}&fetch_time=eq.{ft}"
+    )
+    out: dict = {}
+    price_cap = WING_WIDTH * 3  # sanity threshold for stale/theoretical prices
+    try:
+        r = httpx.get(url, headers=_supabase_headers(), timeout=15)
+        if r.status_code not in (200, 206):
+            return {}
+        for row in r.json():
+            for side in ("call", "put"):
+                strike = row.get(f"expirationprice_{side}") or 0
+                raw = row.get(f"lastrate_{side}") or 0
+                if not strike:
+                    continue
+                try:
+                    price = float(str(raw).replace(",", "")) / MULTIPLIER
+                    if 0 < price <= price_cap:
+                        out[(float(strike), side)] = price
+                except (ValueError, TypeError):
+                    continue
     except Exception:
         pass
-    return 0.0
+    return out
 
 
 def compute_unrealized_pnl(row: pd.Series, live_index: float) -> tuple:
@@ -715,16 +789,24 @@ def compute_unrealized_pnl(row: pd.Series, live_index: float) -> tuple:
     sp_strike = row.get("short_put_strike", 0)
     lc_strike = row.get("long_call_strike", 0)
     lp_strike = row.get("long_put_strike", 0)
-    sc_now = _fetch_current_option_price(sc_strike, expiry, "call") if sc_strike else 0
-    sp_now = _fetch_current_option_price(sp_strike, expiry, "put") if sp_strike else 0
-    lc_now = _fetch_current_option_price(lc_strike, expiry, "call") if lc_strike else 0
-    lp_now = _fetch_current_option_price(lp_strike, expiry, "put") if lp_strike else 0
+    # Single batch fetch instead of 4 individual queries
+    prices = _fetch_option_prices_for_expiry(expiry)
+    sc_now = prices.get((float(sc_strike), "call"), 0) if sc_strike else 0
+    sp_now = prices.get((float(sp_strike), "put"), 0) if sp_strike else 0
+    lc_now = prices.get((float(lc_strike), "call"), 0) if lc_strike else 0
+    lp_now = prices.get((float(lp_strike), "put"), 0) if lp_strike else 0
     if sc_now > 0 or sp_now > 0:
         current_premium = (sc_now + sp_now) - (lc_now + lp_now)
+        # Apply same invariant: current premium can't exceed wing
+        wing_put_v = row.get("actual_wing_put", 0) or (sp_strike - lp_strike) or WING_WIDTH
+        wing_call_v = row.get("actual_wing_call", 0) or (lc_strike - sc_strike) or WING_WIDTH
+        wing_max = max(wing_put_v, wing_call_v)
+        if current_premium > wing_max:
+            current_premium = wing_max
         pnl_pts = entry_premium - current_premium
         return round(pnl_pts * MULTIPLIER, 2), "live"
-    wing_put = row.get("actual_wing_put", 0) or (sp_strike - lp_strike) or 20
-    wing_call = row.get("actual_wing_call", 0) or (lc_strike - sc_strike) or 20
+    wing_put = row.get("actual_wing_put", 0) or (sp_strike - lp_strike) or WING_WIDTH
+    wing_call = row.get("actual_wing_call", 0) or (lc_strike - sc_strike) or WING_WIDTH
     if sp_strike <= live_index <= sc_strike:
         pnl_pts = entry_premium
     elif lp_strike <= live_index < sp_strike:
@@ -738,14 +820,28 @@ def compute_unrealized_pnl(row: pd.Series, live_index: float) -> tuple:
     return round(pnl_pts * MULTIPLIER, 2), "expiry_proxy"
 
 
+def _validate_premium(net_prem: float, wing_put: float, wing_call: float) -> float:
+    """
+    Iron Condor invariant: net premium can NEVER exceed wing width.
+    If it does, the stored prices are corrupt (stale/theoretical TASE data).
+    Cap to wing width to prevent impossible P&L displays.
+    """
+    wing_max = max(wing_put, wing_call)
+    if wing_max > 0 and net_prem > wing_max:
+        return wing_max
+    return net_prem
+
+
 def build_payoff_curve(row: pd.Series) -> tuple:
     lp = row.get("long_put_strike", 0)
     sp = row.get("short_put_strike", 0)
     sc = row.get("short_call_strike", 0)
     lc = row.get("long_call_strike", 0)
-    net_prem = row.get("total_net_premium", 0)
-    wing_put = row.get("actual_wing_put", 0) or (sp - lp) or 20
-    wing_call = row.get("actual_wing_call", 0) or (lc - sc) or 20
+    raw_prem = row.get("total_net_premium", 0)
+    wing_put = row.get("actual_wing_put", 0) or (sp - lp) or WING_WIDTH
+    wing_call = row.get("actual_wing_call", 0) or (lc - sc) or WING_WIDTH
+    # Enforce iron condor invariant: premium <= wing width
+    net_prem = _validate_premium(raw_prem, wing_put, wing_call)
     margin = max(100, (lc - lp) * 0.6)
     x = np.linspace(lp - margin, lc + margin, 500)
     y = np.zeros_like(x)
@@ -795,7 +891,8 @@ def sandbox_compute_payoff(legs: list, price_range: np.ndarray) -> np.ndarray:
 
 def sandbox_compute_metrics(legs: list, base_index: float) -> dict:
     if not legs:
-        return {"max_profit": 0, "max_loss": 0, "breakevens": [], "net_premium": 0}
+        return {"max_profit": 0, "max_loss": 0, "breakevens": [],
+                "net_premium": 0, "price_warning": ""}
     x = np.linspace(base_index - 500, base_index + 500, 2000)
     y = sandbox_compute_payoff(legs, x)
     net_prem = sum(
@@ -807,11 +904,26 @@ def sandbox_compute_metrics(legs: list, base_index: float) -> dict:
         if (y[i - 1] < 0 and y[i] >= 0) or (y[i - 1] >= 0 and y[i] < 0):
             x_cross = x[i - 1] + (0 - y[i - 1]) * (x[i] - x[i - 1]) / (y[i] - y[i - 1])
             breakevens.append(round(x_cross, 1))
+
+    # ── Sanity: detect impossible iron condor metrics ──
+    max_profit_val = float(np.max(y))
+    max_loss_val = float(np.min(y))
+    price_warning = ""
+
+    # For iron condors (4 legs), max_profit should never exceed
+    # wing_width * multiplier.  Flag but don't block.
+    if len(legs) == 4 and max_profit_val > WING_WIDTH * MULTIPLIER * 1.5:
+        price_warning = (
+            f"⚠️ Max profit ₪{max_profit_val:,.0f} exceeds wing "
+            f"limit ₪{WING_WIDTH * MULTIPLIER:,} — prices may be stale"
+        )
+
     return {
-        "max_profit": float(np.max(y)),
-        "max_loss": float(np.min(y)),
+        "max_profit": max_profit_val,
+        "max_loss": max_loss_val,
         "breakevens": breakevens,
         "net_premium": net_prem,
+        "price_warning": price_warning,
     }
 
 
@@ -899,11 +1011,32 @@ def render_expiry_metrics(row):
     net_prem = row.get("total_net_premium", 0)
     max_profit = row.get("max_profit_ils", 0)
     max_risk = row.get("max_risk_ils", 0)
-    rr = abs(row.get("risk_reward_ratio", 0))
+    pflag = row.get("premium_flag", "")
     be_upper = row.get("breakeven_upper", 0)
     be_lower = row.get("breakeven_lower", 0)
     dte = int(row.get("days_to_expiry", 0))
     prem_color = "green" if net_prem > 0 else "red"
+
+    # Recalculate RR from corrected max_profit/risk (not stored value)
+    # When premium was capped, risk_reward_ratio in DB still reflects the
+    # uncapped numbers; recompute for an accurate display.
+    if max_profit > 0:
+        rr = abs(max_risk) / max_profit
+    else:
+        rr = 0
+
+    # Show warning if this row had corrupted/capped pricing
+    if pflag in ("price_capped", "inverted_prices"):
+        st.warning(
+            "⚠️ TASE prices for this interval were stale/theoretical. "
+            "Premium was capped to wing width. P&L shown is corrected."
+        )
+    elif pflag == "negative_premium":
+        st.info(
+            "ℹ️ Negative premium — this interval costs money to enter "
+            "and is not tradeable."
+        )
+
     st.markdown(
         f'<div class="metric-grid">'
         f'<div class="metric-card"><div class="label">Net Premium (pts)</div><div class="value {prem_color}">{fmt_num(net_prem)}</div></div>'
@@ -912,9 +1045,15 @@ def render_expiry_metrics(row):
         f'</div>',
         unsafe_allow_html=True,
     )
+    # Display RR — if max_risk is 0 (capped to wing), show "1:0 (zero-risk)"
+    if abs(max_risk) < 0.01 and max_profit > 0:
+        rr_display = "1:0 (capped)"
+    else:
+        rr_display = f"1:{fmt_num(rr, 1)}"
+
     st.markdown(
         f'<div class="metric-grid">'
-        f'<div class="metric-card"><div class="label">Risk / Reward</div><div class="value white">1:{fmt_num(rr, 1)}</div></div>'
+        f'<div class="metric-card"><div class="label">Risk / Reward</div><div class="value white">{rr_display}</div></div>'
         f'<div class="metric-card"><div class="label">Lower Breakeven</div><div class="value white">{fmt_num(be_lower, 0)}</div></div>'
         f'<div class="metric-card"><div class="label">Upper Breakeven</div><div class="value white">{fmt_num(be_upper, 0)}</div></div>'
         f'<div class="metric-card"><div class="label">DTE</div><div class="value blue">{dte}</div></div>'
@@ -970,6 +1109,61 @@ SANDBOX_TEMPLATES = {
         "legs": [
             {"type": "Call", "action": "SELL", "strike_offset": +1},
             {"type": "Call", "action": "BUY",  "strike_offset": +2},
+        ],
+    },
+    "long_straddle": {
+        "name": "סטרדל ארוך",
+        "icon": "⚡",
+        "desc": "Buy ATM Call + Put — profit from big moves either way",
+        "legs": [
+            {"type": "Put",  "action": "BUY", "strike_offset": 0},
+            {"type": "Call", "action": "BUY", "strike_offset": 0},
+        ],
+    },
+    "short_straddle": {
+        "name": "סטרדל קצר",
+        "icon": "🎯",
+        "desc": "Sell ATM Call + Put — profit from low volatility",
+        "legs": [
+            {"type": "Put",  "action": "SELL", "strike_offset": 0},
+            {"type": "Call", "action": "SELL", "strike_offset": 0},
+        ],
+    },
+    "long_strangle": {
+        "name": "סטרנגל ארוך",
+        "icon": "🔀",
+        "desc": "Buy OTM Call + Put — cheaper volatility bet",
+        "legs": [
+            {"type": "Put",  "action": "BUY", "strike_offset": -2},
+            {"type": "Call", "action": "BUY", "strike_offset": +2},
+        ],
+    },
+    "short_strangle": {
+        "name": "סטרנגל קצר",
+        "icon": "🔒",
+        "desc": "Sell OTM Call + Put — wider safe zone than straddle",
+        "legs": [
+            {"type": "Put",  "action": "SELL", "strike_offset": -2},
+            {"type": "Call", "action": "SELL", "strike_offset": +2},
+        ],
+    },
+    "butterfly": {
+        "name": "פרפר (Butterfly)",
+        "icon": "🦋",
+        "desc": "Buy 1 lower + Buy 1 upper, Sell 2 middle — limited risk",
+        "legs": [
+            {"type": "Call", "action": "BUY",  "strike_offset": -1},
+            {"type": "Call", "action": "SELL", "strike_offset": 0},
+            {"type": "Call", "action": "SELL", "strike_offset": 0},
+            {"type": "Call", "action": "BUY",  "strike_offset": +1},
+        ],
+    },
+    "protective_put": {
+        "name": "פוט מגן",
+        "icon": "🛡️",
+        "desc": "Buy Put to protect existing long position",
+        "legs": [
+            {"type": "Put", "action": "BUY", "strike_offset": -1},
         ],
     },
 }
@@ -1130,91 +1324,20 @@ if nav_page == "🕹️ Demo Trading":
         _settlement_dialog(_results, _bal)
 
     # ── Shared state ──
-    base = live_index if live_index > 0 else 2000
+    # Use live index; fall back to last known base from Supabase;
+    # 2000 is a stale placeholder that corrupts all chart/template math.
+    if live_index > 0:
+        base = live_index
+    elif has_strategies and "base_index_value" in df.columns:
+        _last_base = df["base_index_value"].iloc[0]
+        base = _last_base if _last_base > 0 else 4500
+    else:
+        base = 4500  # reasonable TA-35 range, not the old 2000
     legs = st.session_state.sandbox_legs
 
     # ================================================================
-    # § TOP MODULE — Payoff Chart & Strategy Overlay
+    # § TOP MODULE — Payoff Chart (hero element)
     # ================================================================
-    st.markdown('<div class="section-hdr">📊 גרף תשואה — Payoff Simulator</div>',
-                unsafe_allow_html=True)
-
-    # ── Template selector + Leg builder + Execute ──
-    ctrl_cols = st.columns([2.5, 1.5, 1.5])
-    with ctrl_cols[0]:
-        tpl_labels = {k: f"{v['icon']} {v['name']}" for k, v in SANDBOX_TEMPLATES.items()}
-        sel_tpl = st.selectbox(
-            "תבנית אסטרטגיה",
-            list(SANDBOX_TEMPLATES.keys()),
-            format_func=lambda k: tpl_labels[k],
-            index=0,
-            key="sb_template_select",
-            label_visibility="collapsed",
-        )
-    with ctrl_cols[1]:
-        if st.button("📐 טען תבנית", use_container_width=True, key="sb_load_tpl"):
-            st.session_state.sandbox_template = sel_tpl
-            st.session_state.sandbox_legs = _apply_template(sel_tpl, base)
-            st.rerun()
-    with ctrl_cols[2]:
-        if st.button("🧹 נקה", use_container_width=True, key="sb_clear"):
-            st.session_state.sandbox_legs = []
-            st.session_state.sandbox_template = None
-            st.rerun()
-
-    # ── Editable Leg Rows ──
-    if legs:
-        updated_legs = []
-        for idx, leg in enumerate(legs):
-            cols = st.columns([1.5, 1.5, 2, 2, 1.2, 0.7])
-            with cols[0]:
-                leg_type = st.selectbox("סוג", ["Call", "Put"],
-                                        index=0 if leg["type"] == "Call" else 1,
-                                        key=f"sb_lt_{idx}",
-                                        label_visibility="collapsed" if idx > 0 else "visible")
-            with cols[1]:
-                leg_action = st.selectbox("פעולה", ["BUY", "SELL"],
-                                          index=0 if leg["action"] == "BUY" else 1,
-                                          key=f"sb_la_{idx}",
-                                          label_visibility="collapsed" if idx > 0 else "visible")
-            with cols[2]:
-                leg_strike = st.number_input("Strike", min_value=0.0, max_value=5000.0,
-                                             value=float(leg["strike"]), step=10.0,
-                                             key=f"sb_ls_{idx}",
-                                             label_visibility="collapsed" if idx > 0 else "visible")
-            with cols[3]:
-                leg_prem = st.number_input("Premium (pts)", min_value=0.0, max_value=500.0,
-                                           value=float(leg["premium_pts"]), step=0.5,
-                                           key=f"sb_lp_{idx}",
-                                           label_visibility="collapsed" if idx > 0 else "visible")
-            with cols[4]:
-                leg_qty = st.number_input("Qty", min_value=1, max_value=50,
-                                          value=int(leg.get("qty", 1)), step=1,
-                                          key=f"sb_lq_{idx}",
-                                          label_visibility="collapsed" if idx > 0 else "visible")
-            with cols[5]:
-                if idx > 0:
-                    st.write("")
-                if st.button("🗑️", key=f"sb_del_{idx}", help="הסר"):
-                    continue
-            updated_legs.append({"type": leg_type, "action": leg_action,
-                                 "strike": leg_strike, "premium_pts": leg_prem, "qty": leg_qty})
-        if len(updated_legs) != len(legs):
-            st.session_state.sandbox_legs = updated_legs
-            st.rerun()
-        else:
-            st.session_state.sandbox_legs = updated_legs
-            legs = updated_legs
-
-    add_col, _, _ = st.columns([1, 1, 3])
-    with add_col:
-        if st.button("➕ הוסף רגל", use_container_width=True, key="sb_add_leg"):
-            st.session_state.sandbox_legs.append(
-                {"type": "Call", "action": "BUY",
-                 "strike": round(base / 10) * 10, "premium_pts": 0.0, "qty": 1})
-            st.rerun()
-
-    # ── Payoff Chart ──
     if legs and any(l["premium_pts"] > 0 for l in legs):
         metrics = sandbox_compute_metrics(legs, base)
         net_prem = metrics["net_premium"]
@@ -1223,6 +1346,10 @@ if nav_page == "🕹️ Demo Trading":
         be_list = metrics["breakevens"]
         prem_color = "green" if net_prem > 0 else "red"
         be_str = " / ".join(fmt_num(b, 0) for b in be_list) if be_list else "—"
+
+        # Show price warning if iron condor metrics are impossible
+        if metrics.get("price_warning"):
+            st.warning(metrics["price_warning"])
 
         st.markdown(
             f'<div class="metric-grid">'
@@ -1359,8 +1486,86 @@ if nav_page == "🕹️ Demo Trading":
             f'<div style="font-size:48px;margin-bottom:12px;">📊</div>'
             f'<div style="color:{C_TEXT};font-size:18px;font-weight:700;">הגרף יופיע כאן</div>'
             f'<div style="color:{C_DIM};font-size:14px;margin-top:6px;">'
-            f'בחר תבנית אסטרטגיה או הוסף רגליים כדי להתחיל</div></div>',
+            f'בחר תבנית אסטרטגיה למטה או הוסף רגליים מהשרשרת</div></div>',
             unsafe_allow_html=True)
+
+    # ================================================================
+    # § STRATEGY BUILDER — Template + Leg Editor
+    # ================================================================
+    with st.expander("📐 בחר אסטרטגיה והגדר רגליים", expanded=not bool(legs)):
+        ctrl_cols = st.columns([2.5, 1.5, 1.5])
+        with ctrl_cols[0]:
+            tpl_labels = {k: f"{v['icon']} {v['name']}" for k, v in SANDBOX_TEMPLATES.items()}
+            sel_tpl = st.selectbox(
+                "תבנית אסטרטגיה",
+                list(SANDBOX_TEMPLATES.keys()),
+                format_func=lambda k: tpl_labels[k],
+                index=0,
+                key="sb_template_select",
+                label_visibility="collapsed",
+            )
+        with ctrl_cols[1]:
+            if st.button("📐 טען תבנית", use_container_width=True, key="sb_load_tpl"):
+                st.session_state.sandbox_template = sel_tpl
+                st.session_state.sandbox_legs = _apply_template(sel_tpl, base)
+                st.rerun()
+        with ctrl_cols[2]:
+            if st.button("🧹 נקה", use_container_width=True, key="sb_clear"):
+                st.session_state.sandbox_legs = []
+                st.session_state.sandbox_template = None
+                st.rerun()
+
+        # ── Editable Leg Rows ──
+        if legs:
+            updated_legs = []
+            for idx, leg in enumerate(legs):
+                cols = st.columns([1.5, 1.5, 2, 2, 1.2, 0.7])
+                with cols[0]:
+                    leg_type = st.selectbox("סוג", ["Call", "Put"],
+                                            index=0 if leg["type"] == "Call" else 1,
+                                            key=f"sb_lt_{idx}",
+                                            label_visibility="collapsed" if idx > 0 else "visible")
+                with cols[1]:
+                    leg_action = st.selectbox("פעולה", ["BUY", "SELL"],
+                                              index=0 if leg["action"] == "BUY" else 1,
+                                              key=f"sb_la_{idx}",
+                                              label_visibility="collapsed" if idx > 0 else "visible")
+                with cols[2]:
+                    leg_strike = st.number_input("Strike", min_value=0.0, max_value=5000.0,
+                                                 value=float(leg["strike"]), step=10.0,
+                                                 key=f"sb_ls_{idx}",
+                                                 label_visibility="collapsed" if idx > 0 else "visible")
+                with cols[3]:
+                    leg_prem = st.number_input("Premium (pts)", min_value=0.0, max_value=500.0,
+                                               value=float(leg["premium_pts"]), step=0.5,
+                                               key=f"sb_lp_{idx}",
+                                               label_visibility="collapsed" if idx > 0 else "visible")
+                with cols[4]:
+                    leg_qty = st.number_input("Qty", min_value=1, max_value=50,
+                                              value=int(leg.get("qty", 1)), step=1,
+                                              key=f"sb_lq_{idx}",
+                                              label_visibility="collapsed" if idx > 0 else "visible")
+                with cols[5]:
+                    if idx > 0:
+                        st.write("")
+                    if st.button("🗑️", key=f"sb_del_{idx}", help="הסר"):
+                        continue
+                updated_legs.append({"type": leg_type, "action": leg_action,
+                                     "strike": leg_strike, "premium_pts": leg_prem, "qty": leg_qty})
+            if len(updated_legs) != len(legs):
+                st.session_state.sandbox_legs = updated_legs
+                st.rerun()
+            else:
+                st.session_state.sandbox_legs = updated_legs
+                legs = updated_legs
+
+        add_col, _, _ = st.columns([1, 1, 3])
+        with add_col:
+            if st.button("➕ הוסף רגל", use_container_width=True, key="sb_add_leg"):
+                st.session_state.sandbox_legs.append(
+                    {"type": "Call", "action": "BUY",
+                     "strike": round(base / 10) * 10, "premium_pts": 0.0, "qty": 1})
+                st.rerun()
 
     # ================================================================
     # § MIDDLE MODULE — Interactive Option Chain
@@ -1510,7 +1715,7 @@ if nav_page == "🕹️ Demo Trading":
         for t in open_trades:
             total_unrealized += sandbox_trade_pnl(t, live_index)
 
-    bal_color = "green" if current_balance >= 100_000 else "red"
+    bal_color = "green" if current_balance >= DEMO_INITIAL_BALANCE else "red"
     unr_color = "green" if total_unrealized >= 0 else "red"
     unr_glow = "glow-green" if total_unrealized >= 0 else "glow-red"
 
@@ -1636,6 +1841,30 @@ if nav_page == "🕹️ Demo Trading":
             f'<div style="text-align:center;padding:10px;color:{C_DIM};font-size:13px;">'
             f'סה"כ ממומש: <strong style="color:{real_c};">{fmt_ils(total_realized)}</strong></div>',
             unsafe_allow_html=True)
+
+        # ── CSV Export for knowledge preservation ──
+        import csv
+        import io
+        # newline='' prevents double-newlines on Windows (\r\r\n -> \r\n)
+        csv_buf = io.StringIO(newline='')
+        fieldnames = ["trade_id", "strategy_name", "expiry_date", "entry_index",
+                      "settlement_index", "pnl_ils", "close_reason", "legs", "closed_at"]
+        writer = csv.DictWriter(csv_buf, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for ct in closed_trades:
+            row_out = {k: ct.get(k, "") for k in fieldnames}
+            if isinstance(row_out.get("legs"), (list, dict)):
+                row_out["legs"] = json.dumps(row_out["legs"], ensure_ascii=False)
+            writer.writerow(row_out)
+
+        st.download_button(
+            label="📥 ייצוא היסטוריה ל-CSV",
+            data=csv_buf.getvalue(),
+            file_name=f"demo_trades_{now_il.strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            key="sb_export_csv",
+            use_container_width=True,
+        )
 
 
 # ╔════════════════════════════════════════════════════════════════════╗

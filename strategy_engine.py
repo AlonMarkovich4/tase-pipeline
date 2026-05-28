@@ -91,12 +91,18 @@ def _read_live_data() -> list:
 
 
 _yahoo_cache: dict = {}
+_yahoo_cache_ts: float = 0.0
+_YAHOO_CACHE_TTL = 300  # 5 minutes — Yahoo data can change intraday
 
 
 def _fetch_yahoo_meta() -> dict:
     """Fetch TA-35 meta from Yahoo Finance (price, open, etc.).
-    Cached for the lifetime of the process to avoid duplicate calls."""
-    if _yahoo_cache:
+    Cached with 5-minute TTL to avoid stale data during long runs."""
+    import time as _t
+    global _yahoo_cache_ts
+
+    now_ts = _t.monotonic()
+    if _yahoo_cache and (now_ts - _yahoo_cache_ts) < _YAHOO_CACHE_TTL:
         return _yahoo_cache
 
     url = ("https://query1.finance.yahoo.com/v8/finance/chart/TA35.TA"
@@ -110,11 +116,14 @@ def _fetch_yahoo_meta() -> dict:
             meta = (data.get("chart", {})
                         .get("result", [{}])[0]
                         .get("meta", {}))
+            _yahoo_cache.clear()
             _yahoo_cache.update(meta)
+            _yahoo_cache_ts = now_ts
             return meta
     except Exception as e:
         logger.warning("Yahoo Finance fetch failed: %s", e)
-    return {}
+    # Return stale cache if available rather than empty (better than nothing)
+    return _yahoo_cache if _yahoo_cache else {}
 
 
 def _fetch_index_from_yahoo() -> float:
@@ -150,26 +159,52 @@ def _get_base_index(rows: list) -> float:
     Get the TA-35 base index value.
 
     Priority:
-    1. Yahoo Finance API (real-time, most reliable)
-    2. underlingasset_call/put from Supabase data
+    1. underlingasset from the LATEST snapshot only (filtered by fetch_date+fetch_time)
+    2. Yahoo Finance API (real-time fallback)
     3. ATM delta inference (delta closest to 50)
     4. Strike range midpoint (last resort)
-    """
-    # Method 1: TASE API field (most reliable — comes from the exchange)
-    for row in rows:
-        v = _clean_numeric(row.get("underlingasset_call"))
-        if v > 0:
-            logger.info("Base index from underlingasset_call: %.2f", v)
-            return v
-        v = _clean_numeric(row.get("underlingasset_put"))
-        if v > 0:
-            logger.info("Base index from underlingasset_put: %.2f", v)
-            return v
 
-    # Method 2: Yahoo Finance API (fallback if TASE field missing)
+    Range-validated: rejects values outside 1000-10000 (TA-35 sane range).
+    """
+    SANE_MIN, SANE_MAX = 1000.0, 10000.0
+
+    def _is_sane(v: float) -> bool:
+        return SANE_MIN <= v <= SANE_MAX
+
+    # Method 1: latest snapshot only (avoid stale rows from earlier fetches)
+    # Find the most recent fetch_date+fetch_time pair in the data
+    latest_key = None
+    for row in rows:
+        fd = row.get("fetch_date", "")
+        ft = row.get("fetch_time", "")
+        if fd and ft:
+            key = (fd, ft)
+            if latest_key is None or key > latest_key:
+                latest_key = key
+
+    if latest_key:
+        for row in rows:
+            if (row.get("fetch_date"), row.get("fetch_time")) != latest_key:
+                continue
+            v = _clean_numeric(row.get("underlingasset_call"))
+            if _is_sane(v):
+                logger.info("Base index from underlingasset_call "
+                            "(%s %s): %.2f", latest_key[0], latest_key[1], v)
+                return v
+            v = _clean_numeric(row.get("underlingasset_put"))
+            if _is_sane(v):
+                logger.info("Base index from underlingasset_put "
+                            "(%s %s): %.2f", latest_key[0], latest_key[1], v)
+                return v
+        logger.warning("Latest snapshot (%s %s) has no valid underlying — "
+                       "falling back", latest_key[0], latest_key[1])
+
+    # Method 2: Yahoo Finance API
     val = _fetch_index_from_yahoo()
-    if val > 0:
+    if _is_sane(val):
         return val
+    if val > 0:
+        logger.warning("Yahoo returned out-of-range value: %.2f — skipping", val)
 
     # Method 3: infer from ATM call (delta closest to 50)
     logger.info("Falling back to ATM delta inference")
@@ -184,7 +219,7 @@ def _get_base_index(rows: list) -> float:
                 best_diff = diff
                 best_strike = strike
 
-    if best_strike > 0:
+    if _is_sane(best_strike):
         logger.info("Base index from ATM delta: %.2f (diff=%.1f)",
                     best_strike, best_diff)
         return best_strike
@@ -192,7 +227,7 @@ def _get_base_index(rows: list) -> float:
     # Method 4: midpoint of strike range
     strikes = [_clean_numeric(row.get("expirationprice_call"))
                for row in rows]
-    strikes = [s for s in strikes if s > 100]
+    strikes = [s for s in strikes if _is_sane(s)]
     if strikes:
         midpoint = (min(strikes) + max(strikes)) / 2.0
         logger.warning("Base index from strike midpoint (last resort): %.2f",
@@ -236,6 +271,23 @@ def _find_closest_option(rows: list, target_strike: float,
         # Divide by multiplier to convert to index points
         price = _clean_numeric(row.get(price_col)) / TASE_MULTIPLIER
         diff = abs(strike - target_strike)
+
+        # ----------------------------------------------------------
+        # Price sanity: reject options whose price exceeds
+        # their maximum possible intrinsic value.
+        # A put can never be worth more than its strike price,
+        # a call can never be worth more than the underlying.
+        # Additionally, an OTM option should not have a price
+        # exceeding its distance from ATM + reasonable time value.
+        # Threshold: price must be < WING_WIDTH * 3 (60 pts) to
+        # avoid theoretical/settlement artifacts from TASE.
+        # ----------------------------------------------------------
+        if price > 0 and price > WING_WIDTH * 3:
+            logger.debug(
+                "Skipping %s strike %.0f: price %.2f pts exceeds "
+                "sanity limit (%.0f pts) — likely stale/theoretical",
+                side, strike, price, WING_WIDTH * 3)
+            continue
 
         # Track closest with a real price
         if price > 0 and diff < best_priced_diff:
@@ -314,24 +366,68 @@ def _calculate_condor(base_index: float, interval_pct: float,
     actual_wing_max  = max(actual_wing_put, actual_wing_call)
 
     # Net premium
-    total_net_premium = (
+    raw_net_premium = (
         (short_call["price"] + short_put["price"])
         - (long_call["price"] + long_put["price"])
     )
+
+    # ------------------------------------------------------------------
+    # IRON CONDOR INVARIANT: net premium can NEVER exceed wing width.
+    # Premium > wing means guaranteed profit regardless of index —
+    # this is financially impossible and indicates corrupt prices
+    # (stale/theoretical lastrate from TASE for illiquid OTM options).
+    # ------------------------------------------------------------------
+    premium_flag = ""
+
+    if raw_net_premium > actual_wing_max:
+        logger.warning(
+            "   %.1f%% %s: IMPOSSIBLE premium %.2f pts > wing %.2f pts — "
+            "capping to wing (TASE prices likely stale/theoretical). "
+            "Legs: SC=%.0f@%.2f LC=%.0f@%.2f SP=%.0f@%.2f LP=%.0f@%.2f",
+            interval_pct, expiry_date, raw_net_premium, actual_wing_max,
+            short_call["strike"], short_call["price"],
+            long_call["strike"], long_call["price"],
+            short_put["strike"], short_put["price"],
+            long_put["strike"], long_put["price"])
+        total_net_premium = actual_wing_max
+        premium_flag = "price_capped"
+    elif raw_net_premium < 0:
+        total_net_premium = raw_net_premium
+        premium_flag = "negative_premium"
+        logger.info(
+            "   %.1f%% %s: negative premium %.2f — "
+            "this interval costs money to enter (not tradeable)",
+            interval_pct, expiry_date, raw_net_premium)
+    else:
+        total_net_premium = raw_net_premium
+
+    # ------------------------------------------------------------------
+    # Per-leg sanity: a long option should NEVER cost more than its
+    # corresponding short option (they share the same side, long is
+    # further OTM).  Flag but don't reject — the cap above handles P&L.
+    # ------------------------------------------------------------------
+    if long_put["price"] > short_put["price"] and short_put["price"] > 0:
+        logger.warning(
+            "   %.1f%% %s: Long Put %.0f@%.2f > Short Put %.0f@%.2f "
+            "(inverted prices)", interval_pct, expiry_date,
+            long_put["strike"], long_put["price"],
+            short_put["strike"], short_put["price"])
+        if not premium_flag:
+            premium_flag = "inverted_prices"
+
+    if long_call["price"] > short_call["price"] and short_call["price"] > 0:
+        logger.warning(
+            "   %.1f%% %s: Long Call %.0f@%.2f > Short Call %.0f@%.2f "
+            "(inverted prices)", interval_pct, expiry_date,
+            long_call["strike"], long_call["price"],
+            short_call["strike"], short_call["price"])
+        if not premium_flag:
+            premium_flag = "inverted_prices"
 
     # Use actual wing width for risk calculation (not fixed WING_WIDTH)
     max_profit = total_net_premium * TASE_MULTIPLIER
     max_risk   = (actual_wing_max * TASE_MULTIPLIER) - max_profit
     rr_ratio   = round(max_risk / max_profit, 4) if max_profit > 0 else 0
-
-    # Flag negative premium (paying to enter — not a real trade)
-    premium_flag = ""
-    if total_net_premium < 0:
-        premium_flag = "negative_premium"
-        logger.info(
-            "   %.1f%% %s: negative premium %.2f — "
-            "this interval costs money to enter (not tradeable)",
-            interval_pct, expiry_date, total_net_premium)
 
     # Break-even points
     breakeven_upper = short_call["strike"] + total_net_premium
@@ -429,7 +525,9 @@ def has_unsettled_strategies(expiry_date_iso: str) -> bool:
 
 
 def _save_strategies(strategies: list) -> bool:
-    """Save all strategy rows to Supabase with UPSERT."""
+    """Save all strategy rows to Supabase with UPSERT.
+    Gracefully handles missing columns by retrying without them.
+    """
     url = (f"{_base_url}/rest/v1/iron_condor_strategies"
            f"?on_conflict=trigger_date,expiry_date,interval_pct")
     headers = _headers()
@@ -443,8 +541,28 @@ def _save_strategies(strategies: list) -> bool:
             logger.info("Strategy: saved %d rows to iron_condor_strategies",
                         len(strategies))
             return True
-        logger.error("Strategy: save failed %d: %s",
-                     r.status_code, r.text[:200])
+
+        # If columns don't exist yet, strip them and retry
+        if r.status_code == 400 and "column" in r.text.lower():
+            optional_cols = {"premium_flag", "actual_wing_put", "actual_wing_call"}
+            stripped = [{k: v for k, v in s.items()
+                         if k not in optional_cols} for s in strategies]
+            logger.warning(
+                "Strategy: retrying save without optional columns "
+                "(%s) — run migration SQL to add them",
+                ", ".join(optional_cols))
+            r2 = httpx.post(url, headers=headers,
+                            content=json.dumps(stripped, ensure_ascii=False),
+                            timeout=30)
+            if r2.status_code in (200, 201, 204):
+                logger.info("Strategy: saved %d rows (without optional cols)",
+                            len(strategies))
+                return True
+            logger.error("Strategy: retry also failed %d: %s",
+                         r2.status_code, r2.text[:200])
+        else:
+            logger.error("Strategy: save failed %d: %s",
+                         r.status_code, r.text[:200])
     except Exception as e:
         logger.error("Strategy: save error: %s", e)
     return False
@@ -480,10 +598,12 @@ def run_strategy():
         logger.error("Strategy: no live data available — aborting")
         return False
 
-    # 2. Get base index
+    # 2. Get base index — with strict sanity check
     base_index = _get_base_index(rows)
-    if base_index <= 0:
-        logger.error("Strategy: could not determine base index — aborting")
+    if not (1000 <= base_index <= 10000):
+        logger.error("Strategy: base index %.2f outside TA-35 sane range "
+                     "[1000, 10000] — aborting to prevent corrupt strategies",
+                     base_index)
         return False
 
     logger.info("Base TA-35 index: %.2f", base_index)
@@ -602,11 +722,21 @@ def settle_expiry(expiry_date_iso: str):
         long_put   = _clean_numeric(s.get("long_put_strike"))
         short_call = _clean_numeric(s.get("short_call_strike"))
         long_call  = _clean_numeric(s.get("long_call_strike"))
-        net_premium = _clean_numeric(s.get("total_net_premium"))
+        raw_premium = _clean_numeric(s.get("total_net_premium"))
 
         # Use actual wing widths from saved data (fall back to constant)
         wing_put  = _clean_numeric(s.get("actual_wing_put")) or (short_put - long_put) or WING_WIDTH
         wing_call = _clean_numeric(s.get("actual_wing_call")) or (long_call - short_call) or WING_WIDTH
+
+        # INVARIANT: cap net_premium to wing width at settlement too
+        wing_max = max(wing_put, wing_call)
+        if raw_premium > wing_max:
+            logger.warning(
+                "Settlement: %.1f%% premium %.2f > wing %.2f — capping",
+                _clean_numeric(s.get("interval_pct")), raw_premium, wing_max)
+            net_premium = wing_max
+        else:
+            net_premium = raw_premium
 
         # Determine result
         if short_put <= index_close <= short_call:

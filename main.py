@@ -354,7 +354,10 @@ def _fetch_all_pages(page, expr_date_iso: str):
         if len(all_items) >= total:
             break
         page_num += 1
-        time.sleep(0.5)
+        # Minimal pause between pages of SAME expiry — TASE WAF is
+        # tolerant of intra-expiry pagination. Inter-expiry delay is
+        # still 3-5s (random) in run_cycle.
+        time.sleep(0.15)
 
     return all_items, trade_date, asset_name, underlying_value
 
@@ -433,6 +436,7 @@ def run_cycle(page, cycle_time: datetime):
         "ok": success_count > 0,
         "rows": total_rows,
         "expiries": len(expiry_dates),
+        "expiry_dates": expiry_dates,  # actual TASE trading days this week
     }
 
 
@@ -440,6 +444,33 @@ def is_last_cycle(now: datetime) -> bool:
     """Check if the next cycle would be outside trading hours."""
     next_cycle = now + timedelta(seconds=FETCH_INTERVAL)
     return next_cycle.time() > MARKET_CLOSE
+
+
+def is_last_trading_day_of_week(now: datetime, expiry_dates: list) -> bool:
+    """
+    True if today is the LAST trading day of the current ISO week.
+    Uses TASE expiry dates as ground truth — the last expiry of the week
+    is the last trading day (since options settle on opening of expiry day,
+    the day before the last expiry has no more market activity for that
+    expiry).
+
+    Actually: expiry_dates from TASE include all weekly expiries.
+    The last one is the last day with options expiring this week.
+    For weekly summary purposes, that's the last trading day.
+    """
+    if not expiry_dates:
+        # Fallback: assume Friday (weekday 4) is last
+        return now.weekday() == 4
+
+    today = now.date()
+    week_expiries = [d for d in expiry_dates
+                     if d.isocalendar()[1] == now.isocalendar()[1]
+                     and d.isocalendar()[0] == now.isocalendar()[0]]
+    if not week_expiries:
+        return False
+
+    last_expiry = max(week_expiries)
+    return today == last_expiry
 
 
 # ------------------------------------------------------------------
@@ -471,6 +502,8 @@ def main():
     daily_rows = 0                   # rows collected today
     daily_errors = 0                 # errors today
     daily_expiries = 0               # expiry dates seen today
+    last_known_expiries: list = []   # cache of TASE expiry dates this week
+    weekly_summary_due_at = None     # datetime when post-close summary fires
 
     with sync_playwright() as pw:
         browser, context, page = launch_browser(pw)
@@ -480,13 +513,49 @@ def main():
             now = datetime.now(TZ_ISRAEL)
 
             if not is_trading_hours(now):
-                wait = seconds_until_next_open(now)
-                en, _ = DAY_NAMES.get(now.weekday(), ("?", "?"))
-                logger.info(
-                    "Outside trading hours (%s %s). "
-                    "Sleeping %d min...",
-                    en, now.strftime("%H:%M"), wait // 60,
-                )
+                # ── Post-close weekly summary window ──
+                # If today was the last trading day of this week and we
+                # haven't sent the summary yet, wait until 1h after close.
+                if (weekly_summary_due_at is not None
+                        and now >= weekly_summary_due_at
+                        and weekly_summary_week != current_week):
+                    try:
+                        logger.info(
+                            "*** Sending post-close weekly summary "
+                            "(week %d, %d min after close) ***",
+                            current_week,
+                            int((now - weekly_summary_due_at).total_seconds() / 60),
+                        )
+                        stats = strategy_engine.get_weekly_stats(
+                            current_week, now.isocalendar()[0])
+                        if stats and stats.get("trades", 0) > 0:
+                            telegram_bot.alert_weekly_summary(stats)
+                        else:
+                            logger.info("Weekly summary: no settled trades")
+                        weekly_summary_week = current_week
+                        weekly_summary_due_at = None
+                    except Exception as we:
+                        logger.error("Weekly summary error: %s",
+                                     we, exc_info=True)
+                        weekly_summary_due_at = None  # don't retry-loop
+
+                # If summary is scheduled but not yet due, wake at that time
+                if (weekly_summary_due_at is not None
+                        and now < weekly_summary_due_at):
+                    wait = max(int((weekly_summary_due_at - now).total_seconds()), 30)
+                    logger.info(
+                        "Outside trading hours — waiting %d min for "
+                        "post-close weekly summary at %s",
+                        wait // 60,
+                        weekly_summary_due_at.strftime("%H:%M"))
+                else:
+                    wait = seconds_until_next_open(now)
+                    en, _ = DAY_NAMES.get(now.weekday(), ("?", "?"))
+                    logger.info(
+                        "Outside trading hours (%s %s). "
+                        "Sleeping %d min...",
+                        en, now.strftime("%H:%M"), wait // 60,
+                    )
                 _health_state.update({
                     "status": "sleeping",
                     "last_cycle": _health_state.get("last_cycle"),
@@ -543,6 +612,10 @@ def main():
                     daily_rows += cycle_result["rows"]
                     daily_expiries = max(daily_expiries,
                                          cycle_result["expiries"])
+                    # Cache TASE expiry dates — used to detect last trading day
+                    cycle_expiries = cycle_result.get("expiry_dates") or []
+                    if cycle_expiries:
+                        last_known_expiries = cycle_expiries
 
                 # Weekly strategy trigger: first cycle with data
                 # inside the 12:00-13:00 window
@@ -584,31 +657,26 @@ def main():
                     except Exception as se:
                         logger.error("Settlement error: %s", se, exc_info=True)
 
-                # Weekly summary: last trading day of the week
-                # Sends on last cycle (after 17:00) on Wed/Thu/Fri.
-                # weekly_summary_week guard prevents duplicates, so
-                # the earliest qualifying day that runs becomes the
-                # sender. If Thu is last trading day — it sends.
-                # If Fri also trades — already sent, skipped.
+                # Weekly summary: schedule 1 hour after market close
+                # on the LAST trading day of the week (determined
+                # dynamically from TASE expiry dates — works even
+                # when Friday is a holiday and Thu is actually last).
                 if (ok
-                        and now.weekday() >= 2  # Wed or later
-                        and now.time() >= WEEKLY_SUMMARY
                         and is_last_cycle(now)
-                        and weekly_summary_week != current_week):
-                    try:
-                        logger.info("*** Sending weekly summary (week %d) ***",
-                                    current_week)
-                        stats = strategy_engine.get_weekly_stats(
-                            current_week, now.isocalendar()[0])
-                        if stats and stats.get("trades", 0) > 0:
-                            telegram_bot.alert_weekly_summary(stats)
-                            weekly_summary_week = current_week
-                    except Exception as we:
-                        logger.error("Weekly summary error: %s", we, exc_info=True)
+                        and is_last_trading_day_of_week(now, last_known_expiries)
+                        and weekly_summary_week != current_week
+                        and weekly_summary_due_at is None):
+                    close_dt = now.replace(
+                        hour=MARKET_CLOSE.hour, minute=MARKET_CLOSE.minute,
+                        second=0, microsecond=0)
+                    weekly_summary_due_at = close_dt + timedelta(hours=1)
+                    logger.info(
+                        "*** Scheduled weekly summary for %s (1h after close) ***",
+                        weekly_summary_due_at.strftime("%Y-%m-%d %H:%M"))
 
                 if ok and is_last_cycle(now):
-                    # Weekly backup — runs on last cycle of last trading day
-                    if (now.weekday() >= 2
+                    # Weekly backup — runs on the actual last trading day
+                    if (is_last_trading_day_of_week(now, last_known_expiries)
                             and weekly_backup_week != current_week):
                         try:
                             logger.info("*** Weekly backup to storage ***")

@@ -13,16 +13,20 @@ logger = logging.getLogger("tase_pipeline")
 
 _token:   str = ""
 _chat_id: str = ""
+_initialized: bool = False
 
 
 def _init():
-    global _token, _chat_id
+    global _token, _chat_id, _initialized
     _token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     _chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    _initialized = True
 
 
 def _ensure_init():
-    if not _token:
+    # Use flag instead of truthy check — avoids re-init when token is
+    # legitimately missing (avoids env-var reads on every send_message)
+    if not _initialized:
         _init()
 
 
