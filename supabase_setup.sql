@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS tase_putcall (
     openpositions_call                  NUMERIC,
     positionchange_call                 NUMERIC,
     curr_hour_call                      TEXT,
-    underlingasset_call                 NUMERIC,
+    underlingasset_call                 TEXT,
 
     derivativeid_put                    TEXT,
     derivativename_put                  TEXT,
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS tase_putcall (
     openpositions_put                   NUMERIC,
     positionchange_put                  NUMERIC,
     curr_hour_put                       TEXT,
-    underlingasset_put                  NUMERIC,
+    underlingasset_put                  TEXT,
 
     fetched_at                          TIMESTAMPTZ DEFAULT now()
 );
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS tase_putcall_history (
     openpositions_call                  NUMERIC,
     positionchange_call                 NUMERIC,
     curr_hour_call                      TEXT,
-    underlingasset_call                 NUMERIC,
+    underlingasset_call                 TEXT,
 
     derivativeid_put                    TEXT,
     derivativename_put                  TEXT,
@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS tase_putcall_history (
     openpositions_put                   NUMERIC,
     positionchange_put                  NUMERIC,
     curr_hour_put                       TEXT,
-    underlingasset_put                  NUMERIC,
+    underlingasset_put                  TEXT,
 
     fetched_at                          TIMESTAMPTZ DEFAULT now()
 );
@@ -219,3 +219,46 @@ CREATE TABLE IF NOT EXISTS pipeline_state (
     value       TEXT NOT NULL DEFAULT '1',
     updated_at  TIMESTAMPTZ DEFAULT now()
 );
+
+
+-- ---------------------------------------------------------------------
+-- TABLE 5: demo_balance  (paper-trading account balance ledger)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS demo_balance (
+    id             BIGSERIAL PRIMARY KEY,
+    balance        NUMERIC NOT NULL,
+    change_amount  NUMERIC DEFAULT 0,
+    change_reason  TEXT    DEFAULT '',
+    created_at     TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_demo_balance_id
+    ON demo_balance (id DESC);
+
+
+-- ---------------------------------------------------------------------
+-- TABLE 6: demo_trades  (paper-trading positions, open + closed)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS demo_trades (
+    id                BIGSERIAL PRIMARY KEY,
+    trade_id          TEXT UNIQUE,
+    name              TEXT,
+    template          TEXT,
+    expiry_date       TEXT,
+    entry_index       NUMERIC,
+    legs              JSONB,
+    max_profit_ils    NUMERIC,
+    max_risk_ils      NUMERIC,
+    net_premium       NUMERIC,
+    status            TEXT DEFAULT 'open',
+    settlement_index  NUMERIC,
+    pnl_ils           NUMERIC,
+    close_reason      TEXT,
+    created_at        TIMESTAMPTZ DEFAULT now(),
+    closed_at         TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_demo_trades_status
+    ON demo_trades (status);
+CREATE INDEX IF NOT EXISTS idx_demo_trades_trade_id
+    ON demo_trades (trade_id);

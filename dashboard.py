@@ -637,27 +637,29 @@ def get_live_index() -> float:
     on every cycle), with a direct Yahoo fallback in case the Supabase
     column is empty (e.g., before the first cycle of the day runs).
     Returns 0.0 if both sources fail."""
-    # Method 1: latest snapshot from Supabase (main.py injects Yahoo here)
+    # Method 1: latest snapshot from Supabase (main.py injects Yahoo here).
+    # The column is TEXT in the live DB, so we DON'T use a numeric `gt.0`
+    # filter (unreliable on text) — we pull the latest rows and validate
+    # the value in Python instead.
     if SUPABASE_URL and SUPABASE_KEY:
         url = (
             f"{SUPABASE_URL}/rest/v1/tase_putcall"
             f"?select=underlingasset_call"
-            f"&underlingasset_call=gt.0"
-            f"&order=id.desc&limit=1"
+            f"&order=id.desc&limit=20"
         )
         try:
             r = httpx.get(url, headers=_supabase_headers(), timeout=10)
             if r.status_code in (200, 206):
-                rows = r.json()
-                if rows:
-                    val = rows[0].get("underlingasset_call", 0)
-                    if val:
-                        try:
-                            v = float(val)
-                            if 1000 <= v <= 10000:
-                                return v
-                        except (TypeError, ValueError):
-                            pass
+                for row in r.json():
+                    val = row.get("underlingasset_call")
+                    if val in (None, "", 0):
+                        continue
+                    try:
+                        v = float(str(val).replace(",", ""))
+                        if 1000 <= v <= 10000:
+                            return v
+                    except (TypeError, ValueError):
+                        continue
         except Exception:
             pass
 

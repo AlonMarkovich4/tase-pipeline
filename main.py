@@ -537,12 +537,18 @@ def main():
     history_copied_date = None       # track which date got copied to history
     current_day = None               # track current day for counter resets
     consecutive_failures = 0         # crash detection counter
+    crash_alerted = False            # True once a crash alert was sent for
+                                     # the current failure streak (prevents
+                                     # re-alerting every cycle)
     daily_cycles = 0                 # cycles completed today
     daily_rows = 0                   # rows collected today
     daily_errors = 0                 # errors today
     daily_expiries = 0               # expiry dates seen today
     last_known_expiries: list = []   # cache of TASE expiry dates this week
     weekly_summary_due_at = None     # datetime when post-close summary fires
+    current_week = datetime.now(TZ_ISRAEL).isocalendar()[1]  # init before loop
+                                     # so the off-hours weekly-summary block can
+                                     # reference it even on a fresh off-hours start
 
     with sync_playwright() as pw:
         browser, context, page = launch_browser(pw)
@@ -792,15 +798,18 @@ def main():
                     consecutive_failures += 1
                     logger.warning("Cycle empty (%d consecutive) — recovering session",
                                    consecutive_failures)
-                    if consecutive_failures >= 3:
+                    # Alert ONCE per failure streak (not every cycle)
+                    if consecutive_failures >= 3 and not crash_alerted:
                         telegram_bot.alert_crash(
                             f"{consecutive_failures} consecutive failures"
                         )
+                        crash_alerted = True
                     browser, context, page = recover_session(
                         pw, browser, context, page
                     )
                 else:
                     consecutive_failures = 0
+                    crash_alerted = False
 
                 # Update health state
                 _health_state.update({
@@ -816,8 +825,9 @@ def main():
                 consecutive_failures += 1
                 logger.error("Cycle error (%d consecutive): %s",
                              consecutive_failures, e, exc_info=True)
-                if consecutive_failures >= 3:
+                if consecutive_failures >= 3 and not crash_alerted:
                     telegram_bot.alert_crash(str(e))
+                    crash_alerted = True
                 try:
                     browser, context, page = recover_session(
                         pw, browser, context, page
