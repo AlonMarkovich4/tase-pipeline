@@ -19,7 +19,7 @@ import httpx
 import telegram_bot
 from config import (
     TZ_ISRAEL, TASE_MULTIPLIER, WING_WIDTH, INTERVALS,
-    DAY_NAMES_EN, DAY_NAMES_HE,
+    DAY_NAMES_EN, DAY_NAMES_HE, PRICE_SANITY_MAX_PTS,
 )
 
 logger = logging.getLogger("tase_pipeline")
@@ -273,20 +273,16 @@ def _find_closest_option(rows: list, target_strike: float,
         diff = abs(strike - target_strike)
 
         # ----------------------------------------------------------
-        # Price sanity: reject options whose price exceeds
-        # their maximum possible intrinsic value.
-        # A put can never be worth more than its strike price,
-        # a call can never be worth more than the underlying.
-        # Additionally, an OTM option should not have a price
-        # exceeding its distance from ATM + reasonable time value.
-        # Threshold: price must be < WING_WIDTH * 3 (60 pts) to
-        # avoid theoretical/settlement artifacts from TASE.
+        # Price sanity: reject options whose price exceeds the
+        # central PRICE_SANITY_MAX_PTS threshold from config.
+        # OTM options in our strike range should not exceed this;
+        # higher quotes are stale/theoretical TASE artifacts.
         # ----------------------------------------------------------
-        if price > 0 and price > WING_WIDTH * 3:
+        if price > 0 and price > PRICE_SANITY_MAX_PTS:
             logger.debug(
                 "Skipping %s strike %.0f: price %.2f pts exceeds "
                 "sanity limit (%.0f pts) — likely stale/theoretical",
-                side, strike, price, WING_WIDTH * 3)
+                side, strike, price, PRICE_SANITY_MAX_PTS)
             continue
 
         # Track closest with a real price

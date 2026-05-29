@@ -240,9 +240,14 @@ def _get_expiry_dates(page, max_retries: int = 3) -> list:
         "DerivativeExpirationDateItems", []
     )
 
+    # Accept any weekly expiry from today through the next ~10 days.
+    # This handles the LAST-TRADING-DAY case (e.g. Friday after 09:30)
+    # where this week's expiries already settled and TASE only returns
+    # next week's.  A sliding window from today (instead of fixed
+    # Mon-Fri of the current ISO week) prevents the "empty list" bug
+    # that caused 4 consecutive failures on Fri 29/05.
     today = datetime.now(TZ_ISRAEL).date()
-    monday = today - timedelta(days=today.weekday())
-    friday = monday + timedelta(days=4)
+    window_end = today + timedelta(days=10)
 
     dates = []
     for it in items:
@@ -251,7 +256,7 @@ def _get_expiry_dates(page, max_retries: int = 3) -> list:
         raw = it.get("Date", "")
         try:
             d = date(int(raw[6:10]), int(raw[3:5]), int(raw[0:2]))
-            if monday <= d <= friday:
+            if today <= d <= window_end:
                 dates.append(d)
         except (ValueError, IndexError):
             continue
@@ -378,6 +383,17 @@ def run_cycle(page, cycle_time: datetime):
     logger.info("Expiry dates: %s",
                 [d.isoformat() for d in expiry_dates])
 
+    # ── Fetch live TA-35 once per cycle from Yahoo (independent of TASE).
+    # We inject this into every row so the underlingasset_* columns are
+    # populated (TASE itself almost never returns this field).  This is
+    # the live index value at cycle-start time.
+    cycle_underlying = 0.0
+    try:
+        import strategy_engine as _se
+        cycle_underlying = _se._fetch_index_from_yahoo()
+    except Exception as ye:
+        logger.warning("Live index fetch failed: %s", ye)
+
     success_count = 0
     total_rows = 0
 
@@ -393,13 +409,15 @@ def run_cycle(page, cycle_time: datetime):
         )
 
         # Inject underlying asset value into each item so it's
-        # stored in Supabase and available for strategy_engine
-        if underlying and items:
+        # stored in Supabase and available for strategy_engine /
+        # dashboard.  Priority: TASE-provided value, else Yahoo live.
+        effective_underlying = underlying or cycle_underlying
+        if effective_underlying and items:
             for item in items:
                 if not item.get("UnderlingAsset_Call"):
-                    item["UnderlingAsset_Call"] = underlying
+                    item["UnderlingAsset_Call"] = effective_underlying
                 if not item.get("UnderlingAsset_Put"):
-                    item["UnderlingAsset_Put"] = underlying
+                    item["UnderlingAsset_Put"] = effective_underlying
 
         if items:
             # Sanity checks — warn on suspicious data
@@ -428,15 +446,23 @@ def run_cycle(page, cycle_time: datetime):
         if idx < len(expiry_dates) - 1:
             time.sleep(random.uniform(3, 5))
 
-    # Clean up old snapshots only after successful write
-    if success_count > 0:
+    # Only clean up old snapshots when ALL expiries succeeded.  A partial
+    # cycle would otherwise erase older complete snapshots and leave the
+    # strategy engine with an incomplete view.
+    if success_count == len(expiry_dates) and success_count > 0:
         db._clear_old_snapshots(date_str, time_str)
+    elif 0 < success_count < len(expiry_dates):
+        logger.warning(
+            "Partial cycle (%d/%d expiries) — skipping cleanup to preserve "
+            "previous complete snapshot",
+            success_count, len(expiry_dates))
 
     return {
         "ok": success_count > 0,
         "rows": total_rows,
         "expiries": len(expiry_dates),
         "expiry_dates": expiry_dates,  # actual TASE trading days this week
+        "full_success": success_count == len(expiry_dates),
     }
 
 
@@ -449,28 +475,41 @@ def is_last_cycle(now: datetime) -> bool:
 def is_last_trading_day_of_week(now: datetime, expiry_dates: list) -> bool:
     """
     True if today is the LAST trading day of the current ISO week.
-    Uses TASE expiry dates as ground truth — the last expiry of the week
-    is the last trading day (since options settle on opening of expiry day,
-    the day before the last expiry has no more market activity for that
-    expiry).
 
-    Actually: expiry_dates from TASE include all weekly expiries.
-    The last one is the last day with options expiring this week.
-    For weekly summary purposes, that's the last trading day.
+    Two-tier detection:
+      1. PRIMARY: TASE expiry dates as ground truth — the last expiry
+         of the week is the last trading day.  Robust to one-off holidays
+         (e.g., Pesach week with no Friday expiry).
+      2. FALLBACK (no expiry data cached yet): scan the calendar — today
+         is the last trading day iff today is a trading day AND no later
+         day in this ISO week is a trading day per TRADING_DAYS.
     """
-    if not expiry_dates:
-        # Fallback: assume Friday (weekday 4) is last
-        return now.weekday() == 4
-
     today = now.date()
-    week_expiries = [d for d in expiry_dates
-                     if d.isocalendar()[1] == now.isocalendar()[1]
-                     and d.isocalendar()[0] == now.isocalendar()[0]]
-    if not week_expiries:
+    this_week = (now.isocalendar()[0], now.isocalendar()[1])
+
+    # ── PRIMARY: TASE expiry dates ──
+    if expiry_dates:
+        week_expiries = [
+            d for d in expiry_dates
+            if (d.isocalendar()[0], d.isocalendar()[1]) == this_week
+        ]
+        if week_expiries:
+            return today == max(week_expiries)
+        # expiry list exists but none in this week → no trading this week
         return False
 
-    last_expiry = max(week_expiries)
-    return today == last_expiry
+    # ── FALLBACK: calendar scan based on TRADING_DAYS ──
+    if today.weekday() not in TRADING_DAYS:
+        return False
+    # Walk forward day by day; if any later day in this ISO week is a
+    # trading day, today is NOT the last.
+    for days_ahead in range(1, 8):
+        future = today + timedelta(days=days_ahead)
+        if (future.isocalendar()[0], future.isocalendar()[1]) != this_week:
+            break  # crossed into next ISO week
+        if future.weekday() in TRADING_DAYS:
+            return False
+    return True
 
 
 # ------------------------------------------------------------------
@@ -519,25 +558,34 @@ def main():
                 if (weekly_summary_due_at is not None
                         and now >= weekly_summary_due_at
                         and weekly_summary_week != current_week):
-                    try:
+                    week_key = f"weekly_summary_sent:{now.isocalendar()[0]}-W{current_week:02d}"
+                    if db.state_is_set(week_key):
                         logger.info(
-                            "*** Sending post-close weekly summary "
-                            "(week %d, %d min after close) ***",
-                            current_week,
-                            int((now - weekly_summary_due_at).total_seconds() / 60),
-                        )
-                        stats = strategy_engine.get_weekly_stats(
-                            current_week, now.isocalendar()[0])
-                        if stats and stats.get("trades", 0) > 0:
-                            telegram_bot.alert_weekly_summary(stats)
-                        else:
-                            logger.info("Weekly summary: no settled trades")
+                            "Weekly summary already sent (state marker %s) — skipping",
+                            week_key)
                         weekly_summary_week = current_week
                         weekly_summary_due_at = None
-                    except Exception as we:
-                        logger.error("Weekly summary error: %s",
-                                     we, exc_info=True)
-                        weekly_summary_due_at = None  # don't retry-loop
+                    else:
+                        try:
+                            logger.info(
+                                "*** Sending post-close weekly summary "
+                                "(week %d, %d min after close) ***",
+                                current_week,
+                                int((now - weekly_summary_due_at).total_seconds() / 60),
+                            )
+                            stats = strategy_engine.get_weekly_stats(
+                                current_week, now.isocalendar()[0])
+                            if stats and stats.get("trades", 0) > 0:
+                                telegram_bot.alert_weekly_summary(stats)
+                            else:
+                                logger.info("Weekly summary: no settled trades")
+                            db.state_set(week_key)
+                            weekly_summary_week = current_week
+                            weekly_summary_due_at = None
+                        except Exception as we:
+                            logger.error("Weekly summary error: %s",
+                                         we, exc_info=True)
+                            weekly_summary_due_at = None  # don't retry-loop
 
                 # If summary is scheduled but not yet due, wake at that time
                 if (weekly_summary_due_at is not None
@@ -622,40 +670,57 @@ def main():
                 if (ok
                         and STRATEGY_WINDOW_OPEN <= now.time() <= STRATEGY_WINDOW_CLOSE
                         and strategy_triggered_week != current_week):
-                    en, _ = DAY_NAMES.get(now.weekday(), ("?", "?"))
-                    logger.info("*** %s %s — triggering Iron Condor strategy (week %d) ***",
-                                en, now.strftime("%H:%M"), current_week)
-                    try:
-                        result = strategy_engine.run_strategy()
-                        if result:
-                            strategy_triggered_week = current_week
-                            logger.info("Strategy triggered successfully — "
-                                        "won't retry this week")
-                        else:
-                            logger.warning("Strategy returned False — "
-                                           "will retry next cycle in window")
-                    except Exception as se:
-                        logger.error("Strategy engine error: %s — "
-                                     "will retry next cycle in window",
-                                     se, exc_info=True)
+                    strat_key = f"strategy_triggered:{now.isocalendar()[0]}-W{current_week:02d}"
+                    if db.state_is_set(strat_key):
+                        logger.info(
+                            "Strategy already triggered this week "
+                            "(state marker %s) — skipping", strat_key)
+                        strategy_triggered_week = current_week
+                    else:
+                        en, _ = DAY_NAMES.get(now.weekday(), ("?", "?"))
+                        logger.info("*** %s %s — triggering Iron Condor strategy (week %d) ***",
+                                    en, now.strftime("%H:%M"), current_week)
+                        try:
+                            result = strategy_engine.run_strategy()
+                            if result:
+                                db.state_set(strat_key)
+                                strategy_triggered_week = current_week
+                                logger.info("Strategy triggered successfully — "
+                                            "won't retry this week")
+                            else:
+                                logger.warning("Strategy returned False — "
+                                               "will retry next cycle in window")
+                        except Exception as se:
+                            logger.error("Strategy engine error: %s — "
+                                         "will retry next cycle in window",
+                                         se, exc_info=True)
 
                 # Settlement: expiry day after 10:00 (opening price set)
                 if (ok
                         and now.time() >= SETTLEMENT_AFTER
                         and settled_today != today_iso):
-                    try:
-                        # Quick check: do strategies exist for today's expiry?
-                        has_strategies = strategy_engine.has_unsettled_strategies(today_iso)
-                        if has_strategies:
-                            logger.info("*** Settling expiry %s ***", today_iso)
-                            result = strategy_engine.settle_expiry(today_iso)
-                            if result:
-                                settled_today = today_iso
-                        else:
-                            logger.info("No unsettled strategies for %s — skipping settlement", today_iso)
-                            settled_today = today_iso  # Don't retry today
-                    except Exception as se:
-                        logger.error("Settlement error: %s", se, exc_info=True)
+                    settle_key = f"settlement_done:{today_iso}"
+                    if db.state_is_set(settle_key):
+                        logger.info(
+                            "Settlement already done for %s (state marker) — skipping",
+                            today_iso)
+                        settled_today = today_iso
+                    else:
+                        try:
+                            # Quick check: do strategies exist for today's expiry?
+                            has_strategies = strategy_engine.has_unsettled_strategies(today_iso)
+                            if has_strategies:
+                                logger.info("*** Settling expiry %s ***", today_iso)
+                                result = strategy_engine.settle_expiry(today_iso)
+                                if result:
+                                    db.state_set(settle_key)
+                                    settled_today = today_iso
+                            else:
+                                logger.info("No unsettled strategies for %s — skipping settlement", today_iso)
+                                db.state_set(settle_key)  # mark "checked, nothing to settle"
+                                settled_today = today_iso  # Don't retry today
+                        except Exception as se:
+                            logger.error("Settlement error: %s", se, exc_info=True)
 
                 # Weekly summary: schedule 1 hour after market close
                 # on the LAST trading day of the week (determined
@@ -687,15 +752,23 @@ def main():
 
                     # Daily summary to Telegram
                     if daily_summary_date != today_iso:
-                        try:
-                            logger.info("*** Sending daily summary ***")
-                            telegram_bot.alert_daily_summary(
-                                today_iso, daily_cycles, daily_rows,
-                                daily_expiries, daily_errors,
-                            )
+                        daily_key = f"daily_summary_sent:{today_iso}"
+                        if db.state_is_set(daily_key):
+                            logger.info(
+                                "Daily summary already sent for %s — skipping",
+                                today_iso)
                             daily_summary_date = today_iso
-                        except Exception as de:
-                            logger.error("Daily summary error: %s", de)
+                        else:
+                            try:
+                                logger.info("*** Sending daily summary ***")
+                                telegram_bot.alert_daily_summary(
+                                    today_iso, daily_cycles, daily_rows,
+                                    daily_expiries, daily_errors,
+                                )
+                                db.state_set(daily_key)
+                                daily_summary_date = today_iso
+                            except Exception as de:
+                                logger.error("Daily summary error: %s", de)
 
                     if history_copied_date != today_iso:
                         logger.info("*** Last cycle of the day — saving to history ***")

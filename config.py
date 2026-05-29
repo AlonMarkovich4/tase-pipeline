@@ -16,7 +16,7 @@ TZ_ISRAEL = ZoneInfo("Asia/Jerusalem")
 # ------------------------------------------------------------------
 # Trading calendar
 # ------------------------------------------------------------------
-TRADING_DAYS = {0, 1, 2, 3, 4}          # Mon-Fri
+TRADING_DAYS = {0, 1, 2, 3, 4}          # Mon-Fri (TASE since Nov 2024)
 MARKET_OPEN  = dt_time(9, 30)
 MARKET_CLOSE = dt_time(17, 30)
 
@@ -41,6 +41,11 @@ DAY_NAMES = {
 TASE_MULTIPLIER = 50
 WING_WIDTH      = 20
 INTERVALS       = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
+
+# Pricing sanity threshold — TASE returns stale theoretical prices for
+# illiquid OTM options.  Any quote above this many points is rejected as
+# corrupt (a real OTM option in our chains rarely exceeds 30-40 pts).
+PRICE_SANITY_MAX_PTS = WING_WIDTH * 3   # 60 pts
 
 # ------------------------------------------------------------------
 # Pipeline timing

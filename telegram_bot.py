@@ -5,6 +5,7 @@ All messages are concise, professional, Hebrew RTL.
 """
 
 import os
+import time
 import logging
 
 import httpx
@@ -14,6 +15,12 @@ logger = logging.getLogger("tase_pipeline")
 _token:   str = ""
 _chat_id: str = ""
 _initialized: bool = False
+
+# Retry policy — Telegram is mission-critical for alerts so we retry
+# with exponential backoff up to 3 attempts.  Total worst-case latency
+# is bounded by (1 + 2 + 4) = 7 seconds of sleep + 3 × timeout.
+_MAX_RETRIES = 3
+_TIMEOUT = 15
 
 
 def _init():
@@ -31,7 +38,11 @@ def _ensure_init():
 
 
 def send_message(text: str) -> bool:
-    """Send a Markdown message via Telegram Bot API."""
+    """Send a Markdown message via Telegram Bot API.
+
+    Retries up to _MAX_RETRIES times with exponential backoff.
+    Returns True on success, False if all attempts failed.
+    """
     _ensure_init()
     if not _token or not _chat_id:
         logger.warning("Telegram not configured — skipping notification")
@@ -44,15 +55,34 @@ def send_message(text: str) -> bool:
         "parse_mode": "Markdown",
     }
 
-    try:
-        r = httpx.post(url, json=payload, timeout=15)
-        if r.status_code == 200:
-            logger.info("Telegram message sent")
-            return True
-        logger.warning("Telegram send failed %d: %s",
-                       r.status_code, r.text[:200])
-    except Exception as e:
-        logger.warning("Telegram send error: %s", e)
+    last_err = ""
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            r = httpx.post(url, json=payload, timeout=_TIMEOUT)
+            if r.status_code == 200:
+                if attempt > 1:
+                    logger.info("Telegram message sent (attempt %d)", attempt)
+                else:
+                    logger.info("Telegram message sent")
+                return True
+            # 4xx (other than 429) = permanent client error — don't retry
+            if 400 <= r.status_code < 500 and r.status_code != 429:
+                logger.error("Telegram permanent failure %d: %s — not retrying",
+                             r.status_code, r.text[:200])
+                return False
+            last_err = f"HTTP {r.status_code}: {r.text[:200]}"
+        except Exception as e:
+            last_err = f"exception: {e}"
+
+        if attempt < _MAX_RETRIES:
+            wait = 2 ** (attempt - 1)  # 1s, 2s, 4s
+            logger.warning("Telegram send failed (attempt %d/%d): %s — "
+                           "retrying in %ds",
+                           attempt, _MAX_RETRIES, last_err, wait)
+            time.sleep(wait)
+
+    logger.error("Telegram send FAILED after %d attempts: %s",
+                 _MAX_RETRIES, last_err)
     return False
 
 

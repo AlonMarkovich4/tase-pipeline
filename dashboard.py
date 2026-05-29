@@ -32,10 +32,15 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 TZ = ZoneInfo("Asia/Jerusalem")
 
 try:
-    from config import TASE_MULTIPLIER as MULTIPLIER, WING_WIDTH
+    from config import (
+        TASE_MULTIPLIER as MULTIPLIER,
+        WING_WIDTH,
+        PRICE_SANITY_MAX_PTS,
+    )
 except ImportError:
     MULTIPLIER = 50
     WING_WIDTH = 20
+    PRICE_SANITY_MAX_PTS = 60
 
 # ── Demo trading constants ──
 DEMO_INITIAL_BALANCE = 100_000.0
@@ -96,6 +101,38 @@ section[data-testid="stSidebar"] {{ min-width: 280px !important; }}
     font-size: 13px;
     margin-top: 4px;
 }}
+
+/* ── Freshness banner ── */
+.fresh-banner {{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 8px 18px;
+    margin: 0 auto 18px;
+    max-width: 760px;
+    background: {C_CARD};
+    border: 1px solid {C_BORDER};
+    border-radius: 999px;
+    font-size: 12.5px;
+    color: {C_DIM};
+}}
+.fresh-banner .dot {{
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+    vertical-align: middle;
+}}
+.fresh-banner .fresh-fresh .dot {{ background: {C_GREEN}; box-shadow: 0 0 8px {C_GREEN}66; }}
+.fresh-banner .fresh-stale .dot {{ background: {C_YELLOW}; }}
+.fresh-banner .fresh-cold  .dot {{ background: {C_RED};    }}
+.fresh-banner .fresh-fresh {{ color: {C_GREEN}; }}
+.fresh-banner .fresh-stale {{ color: {C_YELLOW}; }}
+.fresh-banner .fresh-cold  {{ color: {C_RED};    }}
+.fresh-banner .sep {{ color: {C_BORDER}; }}
+.fresh-banner b {{ color: {C_TEXT}; font-weight: 600; }}
 
 /* ── Metric Cards ── */
 .metric-grid {{
@@ -540,24 +577,108 @@ def load_strategies() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def get_live_index() -> float:
+def get_last_update() -> dict:
+    """Return the timestamp of the most recent pipeline cycle.
+
+    Returns: {"datetime": datetime|None, "minutes_ago": int|None,
+              "rows": int, "expiries": int}
+
+    Reads the latest fetch_date+fetch_time pair from tase_putcall
+    so the dashboard can show a "freshness" badge to the user.
+    """
+    out = {"datetime": None, "minutes_ago": None, "rows": 0, "expiries": 0}
     if not SUPABASE_URL or not SUPABASE_KEY:
-        return 0.0
-    url = (
-        f"{SUPABASE_URL}/rest/v1/tase_putcall"
-        f"?select=underlingasset_call"
-        f"&underlingasset_call=gt.0"
-        f"&order=id.desc&limit=1"
-    )
+        return out
     try:
-        r = httpx.get(url, headers=_supabase_headers(), timeout=10)
-        if r.status_code in (200, 206):
-            rows = r.json()
-            if rows:
-                val = rows[0].get("underlingasset_call", 0)
-                return float(val) if val else 0.0
+        url = (
+            f"{SUPABASE_URL}/rest/v1/tase_putcall"
+            f"?select=fetch_date,fetch_time,expiry_date"
+            f"&order=id.desc&limit=1000"
+        )
+        r = httpx.get(url, headers=_supabase_headers(), timeout=8)
+        if r.status_code not in (200, 206):
+            return out
+        rows = r.json()
+        if not rows:
+            return out
+        # latest fetch_date+fetch_time pair
+        latest = max(
+            ((row.get("fetch_date") or ""), (row.get("fetch_time") or ""))
+            for row in rows
+        )
+        fd, ft = latest
+        if not fd or not ft:
+            return out
+        # parse "YYYY-MM-DD" + "HH:MM"
+        try:
+            dt = datetime.strptime(f"{fd} {ft}", "%Y-%m-%d %H:%M")
+            dt = dt.replace(tzinfo=TZ)
+        except ValueError:
+            return out
+        out["datetime"] = dt
+        now = datetime.now(TZ)
+        out["minutes_ago"] = max(0, int((now - dt).total_seconds() / 60))
+        # count rows + distinct expiries from the latest snapshot
+        latest_rows = [
+            row for row in rows
+            if row.get("fetch_date") == fd and row.get("fetch_time") == ft
+        ]
+        out["rows"] = len(latest_rows)
+        out["expiries"] = len({row.get("expiry_date") for row in latest_rows
+                               if row.get("expiry_date")})
     except Exception:
         pass
+    return out
+
+
+@st.cache_data(ttl=60)
+def get_live_index() -> float:
+    """Live TA-35 index — Supabase first (populated by main.py from Yahoo
+    on every cycle), with a direct Yahoo fallback in case the Supabase
+    column is empty (e.g., before the first cycle of the day runs).
+    Returns 0.0 if both sources fail."""
+    # Method 1: latest snapshot from Supabase (main.py injects Yahoo here)
+    if SUPABASE_URL and SUPABASE_KEY:
+        url = (
+            f"{SUPABASE_URL}/rest/v1/tase_putcall"
+            f"?select=underlingasset_call"
+            f"&underlingasset_call=gt.0"
+            f"&order=id.desc&limit=1"
+        )
+        try:
+            r = httpx.get(url, headers=_supabase_headers(), timeout=10)
+            if r.status_code in (200, 206):
+                rows = r.json()
+                if rows:
+                    val = rows[0].get("underlingasset_call", 0)
+                    if val:
+                        try:
+                            v = float(val)
+                            if 1000 <= v <= 10000:
+                                return v
+                        except (TypeError, ValueError):
+                            pass
+        except Exception:
+            pass
+
+    # Method 2: direct Yahoo Finance (live)
+    try:
+        r = httpx.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/TA35.TA"
+            "?interval=1d&range=1d",
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=10,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            meta = (data.get("chart", {})
+                        .get("result", [{}])[0]
+                        .get("meta", {}))
+            price = meta.get("regularMarketPrice", 0)
+            if price and 1000 <= float(price) <= 10000:
+                return float(price)
+    except Exception:
+        pass
+
     return 0.0
 
 
@@ -732,7 +853,7 @@ def _fetch_option_prices_for_expiry(expiry_date: str) -> dict:
     Replaces N individual fetches with 1 query — major perf win for the
     Open Positions page where every interval needs 4 leg prices.
 
-    Sanity: drops prices > WING_WIDTH * 3 (corrupted theoretical TASE values).
+    Sanity: drops prices > PRICE_SANITY_MAX_PTS (corrupted theoretical TASE values).
     """
     if not expiry_date or not SUPABASE_URL:
         return {}
@@ -760,7 +881,7 @@ def _fetch_option_prices_for_expiry(expiry_date: str) -> dict:
         f"&fetch_date=eq.{fd}&fetch_time=eq.{ft}"
     )
     out: dict = {}
-    price_cap = WING_WIDTH * 3  # sanity threshold for stale/theoretical prices
+    price_cap = PRICE_SANITY_MAX_PTS  # sanity threshold for stale/theoretical prices
     try:
         r = httpx.get(url, headers=_supabase_headers(), timeout=15)
         if r.status_code not in (200, 206):
@@ -1216,6 +1337,7 @@ def _settlement_dialog(results: list, new_balance: float):
 # ==================================================================
 now_il = datetime.now(TZ)
 live_index = get_live_index()
+freshness = get_last_update()
 
 st.markdown(f"""
 <div class="dash-header">
@@ -1223,6 +1345,61 @@ st.markdown(f"""
     <div class="sub">{now_il.strftime("%A, %d %B %Y — %H:%M")} Israel</div>
 </div>
 """, unsafe_allow_html=True)
+
+# ── Freshness banner: last fetch + TA-35 + row counts ──
+def _render_freshness_banner():
+    mins = freshness.get("minutes_ago")
+    dt = freshness.get("datetime")
+    rows = freshness.get("rows", 0)
+    expiries = freshness.get("expiries", 0)
+
+    if mins is None or dt is None:
+        st.markdown(
+            '<div class="fresh-banner"><span class="fresh-cold">'
+            '<span class="dot"></span>אין נתונים אחרונים</span></div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # Freshness state
+    if mins <= 20:
+        klass = "fresh-fresh"
+        label = "נתונים עדכניים"
+    elif mins <= 90:
+        klass = "fresh-stale"
+        label = "נתונים מעט מאחרים"
+    else:
+        klass = "fresh-cold"
+        label = "נתונים ישנים"
+
+    if mins == 0:
+        ago = "כעת"
+    elif mins < 60:
+        ago = f"לפני {mins} דק׳"
+    else:
+        h = mins // 60
+        m = mins % 60
+        ago = f"לפני {h}ש׳ {m}ד׳" if m else f"לפני {h}ש׳"
+
+    index_part = (f'<span><b>TA-35</b> {live_index:,.2f}</span>'
+                  f'<span class="sep">|</span>'
+                  if live_index > 0 else "")
+
+    st.markdown(
+        f'<div class="fresh-banner">'
+        f'<span class="{klass}"><span class="dot"></span>{label} — {ago}</span>'
+        f'<span class="sep">|</span>'
+        f'{index_part}'
+        f'<span><b>{rows:,}</b> שורות</span>'
+        f'<span class="sep">|</span>'
+        f'<span><b>{expiries}</b> פקיעות</span>'
+        f'<span class="sep">|</span>'
+        f'<span>{dt.strftime("%d/%m %H:%M")}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+_render_freshness_banner()
 
 
 # ==================================================================

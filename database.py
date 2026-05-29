@@ -89,23 +89,6 @@ def test_connection() -> bool:
 
 
 # ------------------------------------------------------------------
-def _clear_table() -> bool:
-    """Delete ALL rows from the table (keep only latest snapshot).
-    DEPRECATED — use _clear_old_snapshots() after successful write instead."""
-    _ensure_init()
-    url = f"{_base_url}/rest/v1/{_table}?id=gt.0"
-    try:
-        r = httpx.delete(url, headers=_headers(), timeout=15)
-        if r.status_code in (200, 204):
-            logger.info("Cleared table before fresh write")
-            return True
-        logger.warning("Clear table returned %d: %s",
-                       r.status_code, r.text[:200])
-    except Exception as e:
-        logger.warning("Clear table failed: %s", e)
-    return False
-
-
 def _clear_old_snapshots(keep_date: str, keep_time: str) -> bool:
     """Delete rows from previous snapshots, keeping only the current one.
     Safe: only runs after successful write, so data is never lost."""
@@ -378,3 +361,42 @@ def backup_to_storage() -> bool:
             logger.warning("Backup upload %s error: %s", table, e)
 
     return success == len(tables)
+
+
+# ------------------------------------------------------------------
+# Pipeline state — restart-safe markers (daily/weekly summaries,
+# strategy triggers, settlement done). Keys are small strings like
+# "daily_summary_sent:2026-05-29".
+# ------------------------------------------------------------------
+
+def state_is_set(key: str) -> bool:
+    """Return True if a marker exists for this key. Safe on errors → False."""
+    _ensure_init()
+    try:
+        url = (f"{_base_url}/rest/v1/pipeline_state"
+               f"?key=eq.{key}&select=key&limit=1")
+        r = httpx.get(url, headers=_headers(), timeout=10)
+        if r.status_code in (200, 206):
+            return len(r.json()) > 0
+    except Exception as e:
+        logger.warning("state_is_set(%s) error: %s", key, e)
+    return False
+
+
+def state_set(key: str, value: str = "1") -> bool:
+    """UPSERT a state marker. Safe on errors → False (caller must tolerate)."""
+    _ensure_init()
+    try:
+        url = (f"{_base_url}/rest/v1/pipeline_state"
+               f"?on_conflict=key")
+        h = _headers()
+        h["Prefer"] = "resolution=merge-duplicates"
+        payload = json.dumps([{"key": key, "value": value}])
+        r = httpx.post(url, headers=h, content=payload, timeout=10)
+        if r.status_code in (200, 201, 204):
+            return True
+        logger.warning("state_set(%s) returned %d: %s",
+                       key, r.status_code, r.text[:200])
+    except Exception as e:
+        logger.warning("state_set(%s) error: %s", key, e)
+    return False
