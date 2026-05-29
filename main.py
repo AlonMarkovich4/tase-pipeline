@@ -666,7 +666,13 @@ def main():
                         last_known_expiries = cycle_expiries
 
                 # Weekly strategy trigger: first cycle with data
-                # inside the 12:00-13:00 window
+                # inside the 12:00-13:00 window, on the FIRST trading
+                # day of the week.  We must verify day-of-week because
+                # `strategy_triggered_week` is in-memory and clears on
+                # restart, and `_strategies_exist_for_week` is False
+                # any time the table was wiped.  Without this gate,
+                # a Friday restart re-fires the strategy with Friday
+                # prices instead of Monday's.
                 if (ok
                         and STRATEGY_WINDOW_OPEN <= now.time() <= STRATEGY_WINDOW_CLOSE
                         and strategy_triggered_week != current_week):
@@ -675,6 +681,13 @@ def main():
                         logger.info(
                             "Strategy already triggered this week "
                             "(state marker %s) — skipping", strat_key)
+                        strategy_triggered_week = current_week
+                    elif db.has_history_earlier_this_week(today_iso):
+                        logger.info(
+                            "Not the first trading day of week %d "
+                            "(history has earlier rows) — skipping strategy trigger",
+                            current_week)
+                        # Mark in-memory so we don't re-check every cycle this week
                         strategy_triggered_week = current_week
                     else:
                         en, _ = DAY_NAMES.get(now.weekday(), ("?", "?"))

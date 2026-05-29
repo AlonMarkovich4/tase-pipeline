@@ -369,6 +369,41 @@ def backup_to_storage() -> bool:
 # "daily_summary_sent:2026-05-29".
 # ------------------------------------------------------------------
 
+def has_history_earlier_this_week(today_iso: str) -> bool:
+    """Return True if tase_putcall_history has any rows from a date
+    earlier than `today_iso` within the same ISO week.
+
+    Used to detect whether today is the FIRST trading day of the week
+    (robust to Monday holidays — checks actual collected data rather
+    than the calendar).  Strategy trigger uses this to ensure it only
+    fires on day-1 of the week, not later days after a restart that
+    cleared the in-memory `strategy_triggered_week` flag.
+    """
+    _ensure_init()
+    from datetime import date as _date, timedelta as _td
+    try:
+        d = _date.fromisoformat(today_iso)
+        monday = d - _td(days=d.weekday())
+    except ValueError:
+        return False
+
+    if monday >= d:  # today IS monday — no earlier day in week
+        return False
+
+    yesterday_in_week = (d - _td(days=1)).isoformat()
+    url = (f"{_base_url}/rest/v1/{_history_table}"
+           f"?fetch_date=gte.{monday.isoformat()}"
+           f"&fetch_date=lte.{yesterday_in_week}"
+           f"&select=id&limit=1")
+    try:
+        r = httpx.get(url, headers=_headers(), timeout=10)
+        if r.status_code in (200, 206):
+            return len(r.json()) > 0
+    except Exception as e:
+        logger.warning("has_history_earlier_this_week error: %s", e)
+    return False
+
+
 def state_is_set(key: str) -> bool:
     """Return True if a marker exists for this key. Safe on errors → False."""
     _ensure_init()
