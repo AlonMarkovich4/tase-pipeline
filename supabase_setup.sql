@@ -229,7 +229,7 @@ CREATE TABLE IF NOT EXISTS demo_balance (
     balance        NUMERIC NOT NULL,
     change_amount  NUMERIC DEFAULT 0,
     change_reason  TEXT    DEFAULT '',
-    created_at     TIMESTAMPTZ DEFAULT now()
+    updated_at     TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_demo_balance_id
@@ -238,18 +238,18 @@ CREATE INDEX IF NOT EXISTS idx_demo_balance_id
 
 -- ---------------------------------------------------------------------
 -- TABLE 6: demo_trades  (paper-trading positions, open + closed)
+-- Column names match dashboard.py save/load payloads exactly.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS demo_trades (
     id                BIGSERIAL PRIMARY KEY,
     trade_id          TEXT UNIQUE,
-    name              TEXT,
-    template          TEXT,
+    strategy_name     TEXT,
     expiry_date       TEXT,
     entry_index       NUMERIC,
     legs              JSONB,
     max_profit_ils    NUMERIC,
     max_risk_ils      NUMERIC,
-    net_premium       NUMERIC,
+    net_premium_pts   NUMERIC,
     status            TEXT DEFAULT 'open',
     settlement_index  NUMERIC,
     pnl_ils           NUMERIC,

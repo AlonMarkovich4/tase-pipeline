@@ -36,11 +36,13 @@ try:
         TASE_MULTIPLIER as MULTIPLIER,
         WING_WIDTH,
         PRICE_SANITY_MAX_PTS,
+        INTERVALS,
     )
 except ImportError:
     MULTIPLIER = 50
     WING_WIDTH = 20
     PRICE_SANITY_MAX_PTS = 60
+    INTERVALS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
 
 # ── Demo trading constants ──
 DEMO_INITIAL_BALANCE = 100_000.0
@@ -685,6 +687,43 @@ def get_live_index() -> float:
 
 
 # ==================================================================
+# PREFERRED INTERVALS — which intervals the user actually trades.
+# Stored in pipeline_state so both dashboard and the worker (weekly
+# summary) agree.  Empty list = "all intervals" (default behaviour).
+# ==================================================================
+@st.cache_data(ttl=30)
+def get_preferred_intervals() -> list:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    try:
+        url = (f"{SUPABASE_URL}/rest/v1/pipeline_state"
+               f"?key=eq.preferred_intervals&select=value&limit=1")
+        r = httpx.get(url, headers=_supabase_headers(), timeout=8)
+        if r.status_code in (200, 206) and r.json():
+            raw = r.json()[0].get("value", "") or ""
+            return [float(x) for x in raw.split(",") if x.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def set_preferred_intervals(intervals: list) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    val = ",".join(f"{float(x):.1f}" for x in sorted(set(intervals)))
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/pipeline_state?on_conflict=key"
+        h = dict(_supabase_headers())  # copy — don't pollute cached headers
+        h["Prefer"] = "resolution=merge-duplicates,return=minimal"
+        r = httpx.post(url, headers=h,
+                       content=json.dumps([{"key": "preferred_intervals",
+                                            "value": val}]), timeout=8)
+        return r.status_code in (200, 201, 204)
+    except Exception:
+        return False
+
+
+# ==================================================================
 # DATA LAYER — Demo Trading (Sandbox)
 # ==================================================================
 
@@ -830,6 +869,47 @@ def close_demo_trade(trade_id: str, settlement_index: float,
         "closed_at": datetime.now(timezone.utc).isoformat(),
     }), timeout=10)
     return r.status_code in (200, 204)
+
+
+def demo_trade_from_strategy(row) -> dict:
+    """Convert an iron_condor_strategies row into a demo_trades payload —
+    the bridge that lets the auto-computed weekly strategy be pushed into
+    the paper-trading book with one click."""
+    sp  = float(row.get("short_put_strike", 0) or 0)
+    lp  = float(row.get("long_put_strike", 0) or 0)
+    sc  = float(row.get("short_call_strike", 0) or 0)
+    lc  = float(row.get("long_call_strike", 0) or 0)
+    spp = float(row.get("short_put_price", 0) or 0)
+    lpp = float(row.get("long_put_price", 0) or 0)
+    scp = float(row.get("short_call_price", 0) or 0)
+    lcp = float(row.get("long_call_price", 0) or 0)
+    legs = [
+        {"type": "Put",  "action": "SELL", "strike": sp, "premium_pts": spp, "qty": 1},
+        {"type": "Put",  "action": "BUY",  "strike": lp, "premium_pts": lpp, "qty": 1},
+        {"type": "Call", "action": "SELL", "strike": sc, "premium_pts": scp, "qty": 1},
+        {"type": "Call", "action": "BUY",  "strike": lc, "premium_pts": lcp, "qty": 1},
+    ]
+    return {
+        "trade_id":        str(uuid.uuid4())[:12],
+        "strategy_name":   f"IC {float(row.get('interval_pct', 0) or 0):.1f}% (auto)",
+        "expiry_date":     str(row.get("expiry_date", "")),
+        "status":          "open",
+        "legs":            legs,
+        "entry_index":     float(row.get("base_index_value", 0) or 0),
+        "net_premium_pts": round(float(row.get("total_net_premium", 0) or 0), 4),
+        "max_profit_ils":  round(float(row.get("max_profit_ils", 0) or 0), 2),
+        "max_risk_ils":    round(abs(float(row.get("max_risk_ils", 0) or 0)), 2),
+    }
+
+
+def demo_open_has(expiry_date: str, strategy_name: str) -> bool:
+    """True if an open demo trade with this expiry + name already exists
+    (prevents accidental duplicate pushes of the same auto-strategy)."""
+    for t in load_demo_trades("open"):
+        if (str(t.get("expiry_date")) == str(expiry_date)
+                and t.get("strategy_name") == strategy_name):
+            return True
+    return False
 
 
 # ==================================================================
@@ -1443,8 +1523,9 @@ with st.sidebar:
 
     nav_page = st.radio(
         "ניווט",
-        ["🕹️ Demo Trading", "🔵 Open Positions", "📜 History"],
+        ["🏠 Home", "🕹️ Demo Trading", "🔵 Open Positions", "📜 History"],
         captions=[
+            "מה לעשות עכשיו",
             "זירת מסחר דמו",
             f"{n_global_active} פוזיציות פתוחות",
             f"{n_global_history} אסטרטגיות שפקעו",
@@ -1462,9 +1543,201 @@ with st.sidebar:
 
 
 # ╔════════════════════════════════════════════════════════════════════╗
+# ║  PAGE: 🏠 HOME — Decision Command Center                            ║
+# ╚════════════════════════════════════════════════════════════════════╝
+if nav_page == "🏠 Home":
+    preferred = get_preferred_intervals()
+
+    # ─────────────────────────────────────────────────────────────
+    # 1) WEEKLY RECOMMENDATION — rank the latest week's active
+    #    intervals (nearest expiry) by a blended quality score:
+    #    60% win-probability (from short-leg deltas) + 40% reward.
+    # ─────────────────────────────────────────────────────────────
+    st.markdown('<div class="section-hdr">🎯 ההמלצה השבועית</div>',
+                unsafe_allow_html=True)
+
+    rec = []
+    rec_meta = {}
+    if has_strategies:
+        latest_week = df.sort_values("_trigger_dt", ascending=False)["_week_label"].iloc[0]
+        wk = df[(df["_week_label"] == latest_week) & (~df["_is_settled"])]
+        if not wk.empty:
+            nearest_exp = wk["expiry_date"].min()
+            cand = wk[wk["expiry_date"] == nearest_exp].copy()
+            rec_meta = {"week": latest_week, "expiry": nearest_exp,
+                        "base": float(cand.iloc[0].get("base_index_value", 0) or 0)}
+            mp_max = cand["max_profit_ils"].abs().max() or 1
+            for _, r in cand.iterrows():
+                dc = abs(float(r.get("short_call_delta", 0) or 0))
+                dp = abs(float(r.get("short_put_delta", 0) or 0))
+                win_prob = max(0.0, 1.0 - (dc + dp) / 100.0)
+                reward = float(r.get("max_profit_ils", 0) or 0)
+                reward_norm = reward / mp_max if mp_max else 0
+                score = int(round(100 * (0.6 * win_prob + 0.4 * reward_norm)))
+                rec.append({"score": score, "win": win_prob, "row": r,
+                            "pct": float(r.get("interval_pct", 0) or 0)})
+            rec.sort(key=lambda x: x["score"], reverse=True)
+
+    if rec:
+        st.markdown(
+            f'<div style="color:{C_DIM};font-size:12.5px;margin-bottom:8px;">'
+            f'שבוע {rec_meta["week"]} · פקיעה קרובה {rec_meta["expiry"]} · '
+            f'מדד כניסה {rec_meta["base"]:,.0f}</div>', unsafe_allow_html=True)
+        # Fetch open demo trades ONCE (avoid a round-trip per rec card)
+        _open_demo_keys = {(str(t.get("expiry_date")), t.get("strategy_name"))
+                           for t in load_demo_trades("open")}
+        medals = ["🥇", "🥈", "🥉"]
+        for i, item in enumerate(rec[:3]):
+            r = item["row"]
+            pct = item["pct"]
+            sp = float(r.get("short_put_strike", 0) or 0)
+            sc = float(r.get("short_call_strike", 0) or 0)
+            prem = float(r.get("total_net_premium", 0) or 0)
+            mprofit = float(r.get("max_profit_ils", 0) or 0)
+            mrisk = abs(float(r.get("max_risk_ils", 0) or 0))
+            is_pref = pct in preferred
+            pref_tag = ' · <span style="color:#00E676;">מועדף ✓</span>' if is_pref else ""
+            medal = medals[i] if i < len(medals) else "•"
+            st.markdown(
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                f'border-left:4px solid {C_GREEN if i==0 else C_BORDER};'
+                f'border-radius:12px;padding:14px 18px;margin:8px 0;">'
+                f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">'
+                f'<div><span style="font-size:18px;">{medal}</span> '
+                f'<span style="color:{C_TEXT};font-weight:800;font-size:16px;">{pct:.1f}%</span>'
+                f'<span style="color:{C_DIM};font-size:12px;margin-right:8px;"> {sp:,.0f}—{sc:,.0f}</span>{pref_tag}</div>'
+                f'<div style="display:flex;gap:18px;align-items:center;">'
+                f'<span style="color:{C_DIM};font-size:12px;">ציון <strong style="color:{C_BLUE};font-size:15px;">{item["score"]}</strong></span>'
+                f'<span style="color:{C_DIM};font-size:12px;">סיכוי <strong style="color:{C_TEXT};">{item["win"]*100:.0f}%</strong></span>'
+                f'<span style="color:{C_DIM};font-size:12px;">פרמיה <strong style="color:{C_TEXT};">{prem:,.1f}</strong></span>'
+                f'<span style="color:{C_GREEN};font-size:12px;">+{mprofit:,.0f}₪</span>'
+                f'<span style="color:{C_RED};font-size:12px;">-{mrisk:,.0f}₪</span>'
+                f'</div></div></div>', unsafe_allow_html=True)
+            dname = f"IC {pct:.1f}% (auto)"
+            in_demo = (str(rec_meta["expiry"]), dname) in _open_demo_keys
+            hc1, hc2 = st.columns([1, 3])
+            with hc1:
+                if st.button("📲 שגר לדמו", key=f"home_demo_{pct}",
+                             disabled=in_demo, use_container_width=True):
+                    if save_demo_trade(demo_trade_from_strategy(r)):
+                        st.cache_data.clear()
+                        st.success(f"✅ נשלח לדמו: {dname}")
+                        st.rerun()
+                    else:
+                        st.error("שמירה נכשלה")
+            with hc2:
+                if in_demo:
+                    st.caption("כבר בתיק הדמו ✓")
+        st.caption("ציון = 60% סיכוי הצלחה (לפי דלתא) + 40% תשואה יחסית. "
+                   "להמחשה בלבד — לא ייעוץ השקעות.")
+    else:
+        st.info("אין אסטרטגיות פעילות להמלצה. המערכת מחשבת אסטרטגיות חדשות "
+                "ביום המסחר הראשון של השבוע ב-12:00.")
+
+    # ─────────────────────────────────────────────────────────────
+    # 2) AT RISK NOW — open strategies near a breakeven
+    # ─────────────────────────────────────────────────────────────
+    st.markdown('<div class="section-hdr">⚠️ בסיכון עכשיו</div>',
+                unsafe_allow_html=True)
+    risk = []
+    if has_strategies and live_index > 0:
+        act = df[~df["_is_settled"]]
+        for _, r in act.iterrows():
+            be_l = float(r.get("breakeven_lower", 0) or 0)
+            be_u = float(r.get("breakeven_upper", 0) or 0)
+            if be_l <= 0 or be_u <= 0:
+                continue
+            dist = min(abs(live_index - be_l), abs(be_u - live_index))
+            pct_dist = dist / live_index * 100 if live_index else 99
+            inside = be_l <= live_index <= be_u
+            risk.append({"pct_dist": pct_dist, "inside": inside, "row": r})
+        risk.sort(key=lambda x: x["pct_dist"])
+    near = [x for x in risk if x["pct_dist"] < 1.5]
+    if near:
+        rh = ('<div class="table-scroll"><table><thead><tr>'
+              '<th>פקיעה</th><th>מרווח</th><th>Breakevens</th>'
+              '<th>מרחק</th><th>סטטוס</th></tr></thead><tbody>')
+        for x in near[:8]:
+            r = x["row"]
+            be_l = float(r.get("breakeven_lower", 0) or 0)
+            be_u = float(r.get("breakeven_upper", 0) or 0)
+            css = "sell" if (not x["inside"] or x["pct_dist"] < 0.5) else ""
+            badge = ('<span class="badge active">בתוך הטווח</span>' if x["inside"]
+                     else '<span class="badge settled">פרץ</span>')
+            rh += (f'<tr><td>{r.get("expiry_date","")}</td>'
+                   f'<td><strong>{float(r.get("interval_pct",0) or 0):.1f}%</strong></td>'
+                   f'<td>{be_l:,.0f} — {be_u:,.0f}</td>'
+                   f'<td class="{css}"><strong>{x["pct_dist"]:.2f}%</strong></td>'
+                   f'<td>{badge}</td></tr>')
+        rh += '</tbody></table></div>'
+        st.markdown(rh, unsafe_allow_html=True)
+    elif not has_strategies or live_index <= 0:
+        st.caption("אין מדד חי או אסטרטגיות פעילות — לא ניתן להעריך סיכון כרגע.")
+    else:
+        st.success("✅ כל הפוזיציות הפתוחות במרחק בטוח מ-breakeven (>1.5%).")
+
+    # ─────────────────────────────────────────────────────────────
+    # 3) WEEK PULSE
+    # ─────────────────────────────────────────────────────────────
+    st.markdown('<div class="section-hdr">📊 דופק השבוע</div>',
+                unsafe_allow_html=True)
+    week_pnl = 0.0
+    lead_txt = "—"
+    if has_strategies:
+        latest_week = df.sort_values("_trigger_dt", ascending=False)["_week_label"].iloc[0]
+        wkall = df[df["_week_label"] == latest_week]
+        settled = wkall[wkall["_is_settled"]]
+        if not settled.empty:
+            if preferred:
+                settled = settled[settled["interval_pct"].isin(preferred)]
+            week_pnl = float(settled["actual_pnl_ils"].sum()) if not settled.empty else 0.0
+            if not settled.empty:
+                by_int = settled.groupby("interval_pct")["actual_pnl_ils"].sum()
+                if not by_int.empty:
+                    lead = by_int.idxmax()
+                    lead_txt = f"{lead:.1f}% ({fmt_ils(by_int.max())})"
+    demo_bal = get_demo_balance()
+    n_demo_open = len(load_demo_trades("open"))
+    wk_color = "green" if week_pnl >= 0 else "red"
+    bal_color = "green" if demo_bal >= DEMO_INITIAL_BALANCE else "red"
+    pref_label = ("+".join(f"{p:.1f}%" for p in preferred)
+                  if preferred else "כל המרווחים")
+    st.markdown(
+        f'<div class="metric-grid">'
+        f'<div class="metric-card"><div class="label">P&L שבועי (מסולק)</div>'
+        f'<div class="value {wk_color}">{fmt_ils(week_pnl)}</div></div>'
+        f'<div class="metric-card"><div class="label">מרווח מוביל</div>'
+        f'<div class="value white">{lead_txt}</div></div>'
+        f'<div class="metric-card"><div class="label">פוזיציות דמו פתוחות</div>'
+        f'<div class="value blue">{n_demo_open}</div></div>'
+        f'<div class="metric-card"><div class="label">יתרת דמו</div>'
+        f'<div class="value {bal_color}">{demo_bal:,.0f} ₪</div></div>'
+        f'</div>', unsafe_allow_html=True)
+
+    # ─────────────────────────────────────────────────────────────
+    # 4) PREFERRED INTERVALS — drives the "real" weekly win-rate
+    # ─────────────────────────────────────────────────────────────
+    st.markdown('<div class="section-hdr">⭐ מרווחים מועדפים</div>',
+                unsafe_allow_html=True)
+    st.caption("בחר את המרווחים שאתה באמת סוחר. הסיכום השבועי ב-Telegram "
+               "ו-P&L השבועי יחושבו רק עליהם (במקום על כל 8).")
+    pick = st.multiselect(
+        "מרווחים מועדפים", options=INTERVALS,
+        default=[p for p in preferred if p in INTERVALS],
+        format_func=lambda x: f"{x:.1f}%", label_visibility="collapsed")
+    if st.button("💾 שמור מרווחים מועדפים"):
+        if set_preferred_intervals(pick):
+            get_preferred_intervals.clear()
+            st.success("✅ נשמר. הסיכום השבועי יתבסס על הבחירה הזו.")
+            st.rerun()
+        else:
+            st.error("שמירה נכשלה")
+
+
+# ╔════════════════════════════════════════════════════════════════════╗
 # ║  PAGE: 🕹️ DEMO TRADING WORKSPACE                                ║
 # ╚════════════════════════════════════════════════════════════════════╝
-if nav_page == "🕹️ Demo Trading":
+elif nav_page == "🕹️ Demo Trading":
 
     # ── Background: Auto-Settlement ──────────────────────────────
     _open_check = load_demo_trades("open")
@@ -2161,6 +2434,24 @@ elif has_strategies:
             ref_p = live_index if live_index > 0 else 0
             ref_l = f"Live: {ref_p:,.2f}" if ref_p > 0 else ""
             render_payoff_chart(row, ref_price=ref_p, ref_label=ref_l)
+
+            # ── Bridge: push this auto-strategy to the demo book ──
+            demo_name = f"IC {sel_active_interval:.1f}% (auto)"
+            already_in_demo = demo_open_has(sel_active_expiry, demo_name)
+            tdc1, tdc2 = st.columns([1, 2])
+            with tdc1:
+                if st.button("📲 שגר לדמו", use_container_width=True,
+                             disabled=already_in_demo,
+                             key=f"to_demo_{sel_active_expiry}_{sel_active_interval}"):
+                    if save_demo_trade(demo_trade_from_strategy(row)):
+                        st.cache_data.clear()
+                        st.success(f"✅ נשלח לתיק הדמו: {demo_name} | פקיעה {sel_active_expiry}")
+                        st.rerun()
+                    else:
+                        st.error("שמירה לתיק הדמו נכשלה")
+            with tdc2:
+                if already_in_demo:
+                    st.caption("כבר קיים בתיק הדמו לפקיעה זו ✓")
 
     # ==============================================================
     # HISTORY

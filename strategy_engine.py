@@ -851,6 +851,22 @@ def settle_expiry(expiry_date_iso: str):
 # Weekly stats for summary report
 # ------------------------------------------------------------------
 
+def _get_preferred_intervals() -> list:
+    """Read the user's preferred trading intervals from pipeline_state.
+    Returns a list of floats (e.g. [1.0, 1.5]) or [] if not set / on error.
+    Shared with the dashboard so the weekly summary matches the UI."""
+    try:
+        url = (f"{_base_url}/rest/v1/pipeline_state"
+               f"?key=eq.preferred_intervals&select=value&limit=1")
+        r = httpx.get(url, headers=_headers(), timeout=10)
+        if r.status_code in (200, 206) and r.json():
+            raw = r.json()[0].get("value", "") or ""
+            return [round(float(x), 1) for x in raw.split(",") if x.strip()]
+    except Exception as e:
+        logger.warning("_get_preferred_intervals error: %s", e)
+    return []
+
+
 def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
     """Gather stats for the given ISO week number for the weekly summary."""
     _init()
@@ -885,6 +901,17 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
 
     if not week_rows:
         return {}
+
+    # Restrict to the user's PREFERRED intervals (if configured) so the
+    # win-rate reflects what they actually trade, not all 8 variations.
+    preferred = _get_preferred_intervals()
+    if preferred:
+        filtered = [r for r in week_rows
+                    if round(_clean_numeric(r.get("interval_pct", 0)), 1) in preferred]
+        if filtered:  # only narrow when at least one preferred interval settled
+            week_rows = filtered
+            logger.info("Weekly stats restricted to preferred intervals: %s",
+                        preferred)
 
     # Compute week stats
     trades = len(week_rows)
