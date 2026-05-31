@@ -81,6 +81,26 @@ html, body, [class*="css"] {{
 #MainMenu, footer, header {{ visibility: hidden; }}
 .stDeployButton {{ display: none; }}
 
+/* ── RTL for Hebrew content — tables & charts stay LTR ── */
+.stMarkdown, .stRadio, .stSelectbox, .stMultiSelect,
+.stTextInput, .stCaption, .stAlert, .stCheckbox,
+section[data-testid="stSidebar"] {{
+    direction: rtl;
+    text-align: right;
+}}
+/* Keep all numeric/tabular content LTR */
+.table-scroll, .metric-grid, .metric-card, .fresh-banner,
+.pnl-hero, .cmp-row, .dash-header,
+.stPlotlyChart, .chain-wrap {{
+    direction: ltr;
+    text-align: center;
+}}
+/* Streamlit radio/selectbox labels back to RTL */
+.stRadio label, .stSelectbox label, .stMultiSelect label {{
+    direction: rtl;
+    text-align: right;
+}}
+
 /* ── Lock sidebar open ── */
 [data-testid="collapsedControl"] {{ display: none !important; }}
 section[data-testid="stSidebar"] {{ min-width: 280px !important; }}
@@ -130,9 +150,11 @@ section[data-testid="stSidebar"] {{ min-width: 280px !important; }}
 .fresh-banner .fresh-fresh .dot {{ background: {C_GREEN}; box-shadow: 0 0 8px {C_GREEN}66; }}
 .fresh-banner .fresh-stale .dot {{ background: {C_YELLOW}; }}
 .fresh-banner .fresh-cold  .dot {{ background: {C_RED};    }}
+.fresh-banner .fresh-closed .dot {{ background: {C_DIM};   }}
 .fresh-banner .fresh-fresh {{ color: {C_GREEN}; }}
 .fresh-banner .fresh-stale {{ color: {C_YELLOW}; }}
 .fresh-banner .fresh-cold  {{ color: {C_RED};    }}
+.fresh-banner .fresh-closed {{ color: {C_DIM};   }}
 .fresh-banner .sep {{ color: {C_BORDER}; }}
 .fresh-banner b {{ color: {C_TEXT}; font-weight: 600; }}
 
@@ -155,7 +177,7 @@ section[data-testid="stSidebar"] {{ min-width: 280px !important; }}
     overflow: hidden;
 }}
 .metric-card .label {{
-    color: {C_DIM};
+    color: #B0B5BB;
     font-size: 12px;
     font-weight: 600;
     text-transform: uppercase;
@@ -285,6 +307,23 @@ section[data-testid="stSidebar"] {{ min-width: 280px !important; }}
     background: rgba(255,23,68,0.12);
     color: {C_RED};
     border: 1px solid rgba(255,23,68,0.25);
+}}
+
+/* ── Unified empty-state card ── */
+.empty-state {{
+    background: {C_CARD};
+    border: 1px solid {C_BORDER};
+    border-radius: 12px;
+    padding: 40px 20px;
+    text-align: center;
+    margin: 12px 0;
+}}
+.empty-state .es-icon {{ font-size: 36px; margin-bottom: 8px; }}
+.empty-state .es-title {{
+    color: {C_TEXT}; font-size: 16px; font-weight: 700;
+}}
+.empty-state .es-sub {{
+    color: #B0B5BB; font-size: 13px; margin-top: 6px;
 }}
 
 /* ── Section Header ── */
@@ -1443,8 +1482,17 @@ def _render_freshness_banner():
         )
         return
 
-    # Freshness state
-    if mins <= 20:
+    # Market-aware freshness state. When the market is closed (weekend
+    # Sun/Fri-Sat depending, or outside 09:30-17:30 Mon-Fri) stale data
+    # is EXPECTED, so show a neutral "market closed" state instead of an
+    # alarming red/yellow that looks like a malfunction.
+    market_open = (now_il.weekday() in (0, 1, 2, 3, 4)
+                   and (9, 30) <= (now_il.hour, now_il.minute) <= (17, 30))
+
+    if not market_open:
+        klass = "fresh-closed"
+        label = "🌙 שוק סגור — עדכון אחרון"
+    elif mins <= 20:
         klass = "fresh-fresh"
         label = "נתונים עדכניים"
     elif mins <= 90:
@@ -1631,8 +1679,12 @@ if nav_page == "🏠 Home":
         st.caption("ציון = 60% סיכוי הצלחה (לפי דלתא) + 40% תשואה יחסית. "
                    "להמחשה בלבד — לא ייעוץ השקעות.")
     else:
-        st.info("אין אסטרטגיות פעילות להמלצה. המערכת מחשבת אסטרטגיות חדשות "
-                "ביום המסחר הראשון של השבוע ב-12:00.")
+        st.markdown(
+            f'<div class="empty-state">'
+            f'<div class="es-icon">🎯</div>'
+            f'<div class="es-title">אין אסטרטגיות פעילות להמלצה</div>'
+            f'<div class="es-sub">המערכת מחשבת אסטרטגיות חדשות ביום המסחר הראשון של השבוע ב-12:00</div>'
+            f'</div>', unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────────────────────
     # 2) AT RISK NOW — open strategies near a breakeven
@@ -2028,36 +2080,49 @@ elif nav_page == "🕹️ Demo Trading":
     expiry_dates = get_available_expiries()
 
     if not expiry_dates:
-        st.info("אין נתוני אופציות זמינים כרגע. המערכת תטען נתונים בזמן המסחר.")
+        st.markdown(
+            f'<div class="empty-state">'
+            f'<div class="es-icon">📊</div>'
+            f'<div class="es-title">אין נתוני אופציות זמינים</div>'
+            f'<div class="es-sub">המערכת תטען נתונים בזמן המסחר</div>'
+            f'</div>', unsafe_allow_html=True)
     else:
-        chain_header = st.columns([3, 1])
+        chain_header = st.columns([2, 1, 1])
         with chain_header[1]:
             sel_expiry = st.selectbox("📅 פקיעה", expiry_dates, index=0,
                                       key="sb_chain_expiry")
+        with chain_header[2]:
+            show_all_chain = st.toggle("הצג את כל ה-strikes",
+                                       value=False, key="sb_chain_show_all")
         chain_df = load_option_chain(sel_expiry)
 
         if chain_df.empty:
             st.warning("אין נתוני שרשרת לתאריך הפקיעה שנבחר.")
         else:
+            CHAIN_WINDOW = 8  # strikes each side of ATM (focused default)
             if live_index > 0:
-                atm_strike = chain_df.iloc[
-                    (chain_df["strike"] - live_index).abs().argsort().iloc[0]]["strike"]
-                display_df = chain_df[
-                    (chain_df["strike"] >= live_index - 200) &
-                    (chain_df["strike"] <= live_index + 200)
-                ].copy()
+                atm_pos = int((chain_df["strike"] - live_index).abs().argsort().iloc[0])
+                atm_strike = chain_df.iloc[atm_pos]["strike"]
             else:
+                atm_pos = len(chain_df) // 2
                 atm_strike = 0
+
+            if show_all_chain:
                 display_df = chain_df.copy()
+            else:
+                lo = max(0, atm_pos - CHAIN_WINDOW)
+                hi = min(len(chain_df), atm_pos + CHAIN_WINDOW + 1)
+                display_df = chain_df.iloc[lo:hi].copy()
 
             if display_df.empty:
                 display_df = chain_df.copy()
 
             with chain_header[0]:
                 n_strikes = len(display_df)
+                scope = "הכל" if show_all_chain else f"ATM ±{CHAIN_WINDOW}"
                 st.markdown(
                     f'<span style="color:{C_DIM};font-size:12px;">'
-                    f'{n_strikes} strikes  |  Expiry: {sel_expiry}'
+                    f'{n_strikes} strikes ({scope})  |  פקיעה: {sel_expiry}'
                     f'{"  |  ATM ≈ " + fmt_num(atm_strike, 0) if atm_strike > 0 else ""}'
                     f'</span>', unsafe_allow_html=True)
 
@@ -2371,7 +2436,12 @@ elif has_strategies:
     # ==============================================================
     if nav_page == "🔵 Open Positions":
         if all_active.empty:
-            st.info("אין פוזיציות פתוחות כרגע — כל האסטרטגיות של השבוע פקעו.")
+            st.markdown(
+                f'<div class="empty-state">'
+                f'<div class="es-icon">📭</div>'
+                f'<div class="es-title">אין פוזיציות פתוחות</div>'
+                f'<div class="es-sub">כל האסטרטגיות של השבוע פקעו</div>'
+                f'</div>', unsafe_allow_html=True)
         else:
             active_intervals = sorted(all_active["interval_pct"].unique())
             interval_pnl_active = []
@@ -2458,7 +2528,12 @@ elif has_strategies:
     # ==============================================================
     elif nav_page == "📜 History":
         if all_history.empty:
-            st.info("אין היסטוריה — אף אסטרטגיה לא פקעה עדיין.")
+            st.markdown(
+                f'<div class="empty-state">'
+                f'<div class="es-icon">📜</div>'
+                f'<div class="es-title">אין היסטוריה</div>'
+                f'<div class="es-sub">אף אסטרטגיה לא פקעה עדיין</div>'
+                f'</div>', unsafe_allow_html=True)
         else:
             history_intervals = sorted(all_history["interval_pct"].unique())
             comparison_data = []
