@@ -1,0 +1,21 @@
+services:
+  - type: worker
+    name: tase-pipeline
+    runtime: docker
+    dockerfile_path: ./Dockerfile
+    plan: starter
+    region: frankfurt
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: HEADLESS
+        sync: false
+    # Note: the dashboard is deployed as a SEPARATE Render web service
+    # (Procfile web process) pointing at the same repo.
+    # FETCH_INTERVAL_MINUTES is optional (defaults to 15).
