@@ -37,10 +37,10 @@ _table: str = ""
 # per row on every strategy cycle (M-3: reduce SELECT * payload).
 _STRATEGY_COLS = (
     "expiry_date,fetch_date,fetch_time,"
-    "expirationprice_call,lastrate_call,delta_call,"
-    "derivativeid_call,underlingasset_call,"
-    "expirationprice_put,lastrate_put,delta_put,"
-    "derivativeid_put,underlingasset_put"
+    "expirationprice_call,lastrate_call,baserate_call,delta_call,"
+    "derivativeid_call,dealsno_call,underlingasset_call,"
+    "expirationprice_put,lastrate_put,baserate_put,delta_put,"
+    "derivativeid_put,dealsno_put,underlingasset_put"
 )
 
 
@@ -270,18 +270,11 @@ def _find_closest_option(rows: list, target_strike: float,
     if exclude_strikes is None:
         exclude_strikes = set()
 
-<<<<<<< HEAD
-    best_priced      = None
-    best_priced_diff = float("inf")
-    best_any         = None
-    best_any_diff    = float("inf")
-=======
     # Track four tiers of candidates: live > stale-priced > baserate > any
     best_live       = None;  best_live_diff       = float("inf")
     best_stale      = None;  best_stale_diff      = float("inf")
     best_base       = None;  best_base_diff       = float("inf")
     best_any        = None;  best_any_diff        = float("inf")
->>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
 
     strike_col  = f"expirationprice_{side}"
     price_col   = f"lastrate_{side}"
@@ -290,8 +283,9 @@ def _find_closest_option(rows: list, target_strike: float,
     id_col      = f"derivativeid_{side}"
     deals_col   = f"dealsno_{side}"
 
-    _MULTIPLIER_D = Decimal(str(TASE_MULTIPLIER))
-    _SANITY_D     = Decimal(str(PRICE_SANITY_MAX_PTS))
+    def _candidate(strike, price, delta, opt_id, deals, source):
+        return {"strike": strike, "price": price, "delta": delta,
+                "id": opt_id, "deals": deals, "price_source": source}
 
     for row in rows:
         strike = _clean_numeric(row.get(strike_col))
@@ -299,45 +293,13 @@ def _find_closest_option(rows: list, target_strike: float,
             continue
         if strike in exclude_strikes:
             continue
-<<<<<<< HEAD
-        # Use Decimal division so the price-per-point is exact (avoids the
-        # float rounding in `lastrate / 50` that accumulates across all legs).
-        price_raw = _clean_numeric(row.get(price_col))
-        price     = Decimal(str(price_raw)) / _MULTIPLIER_D
-        diff      = abs(strike - target_strike)
-
-        if price > 0 and price > _SANITY_D:
-            logger.debug(
-                "Skipping %s strike %.0f: price %.4f pts exceeds "
-                "sanity limit (%.0f pts) — likely stale/theoretical",
-                side, strike, float(price), PRICE_SANITY_MAX_PTS)
-            continue
-
-        if price > 0 and diff < best_priced_diff:
-            best_priced_diff = diff
-            best_priced = {
-                "strike": strike,
-                "price":  price,   # Decimal
-                "delta":  _clean_numeric(row.get(delta_col)),
-                "id":     row.get(id_col, ""),
-            }
-
-        if diff < best_any_diff:
-            best_any_diff = diff
-            best_any = {
-                "strike": strike,
-                "price":  price,   # Decimal
-                "delta":  _clean_numeric(row.get(delta_col)),
-                "id":     row.get(id_col, ""),
-            }
-=======
         # TASE API returns lastrate/baserate in ₪ per contract (points × multiplier)
-        price     = _clean_numeric(row.get(price_col)) / TASE_MULTIPLIER
+        price      = _clean_numeric(row.get(price_col)) / TASE_MULTIPLIER
         base_price = _clean_numeric(row.get(base_col)) / TASE_MULTIPLIER
-        deals     = int(_clean_numeric(row.get(deals_col)))
-        delta     = _clean_numeric(row.get(delta_col))
-        opt_id    = row.get(id_col, "")
-        diff      = abs(strike - target_strike)
+        deals      = int(_clean_numeric(row.get(deals_col)))
+        delta      = _clean_numeric(row.get(delta_col))
+        opt_id     = row.get(id_col, "")
+        diff       = abs(strike - target_strike)
 
         # ----------------------------------------------------------
         # Price sanity: reject prices above PRICE_SANITY_MAX_PTS
@@ -351,31 +313,27 @@ def _find_closest_option(rows: list, target_strike: float,
         if base_price > 0 and base_price > PRICE_SANITY_MAX_PTS:
             base_price = 0
 
-        def _candidate(p, source):
-            return {"strike": strike, "price": p, "delta": delta,
-                    "id": opt_id, "deals": deals, "price_source": source}
-
         # Tier 1: live-traded today
         if price > 0 and deals > 0 and diff < best_live_diff:
             best_live_diff = diff
-            best_live = _candidate(price, "live")
+            best_live = _candidate(strike, price, delta, opt_id, deals, "live")
 
         # Tier 2: priced but not traded today (stale lastrate)
         if price > 0 and deals == 0 and diff < best_stale_diff:
             best_stale_diff = diff
-            best_stale = _candidate(price, "stale")
+            best_stale = _candidate(strike, price, delta, opt_id, deals, "stale")
 
         # Tier 3: baserate fallback (TASE-computed opening price)
         if price == 0 and base_price > 0 and diff < best_base_diff:
             best_base_diff = diff
-            best_base = _candidate(base_price, "baserate")
+            best_base = _candidate(strike, base_price, delta, opt_id, deals, "baserate")
 
         # Tier 4: closest strike regardless
         effective = price if price > 0 else base_price
         if diff < best_any_diff:
             best_any_diff = diff
-            best_any = _candidate(effective, "none" if effective == 0 else "fallback")
->>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
+            src = "none" if effective == 0 else "fallback"
+            best_any = _candidate(strike, effective, delta, opt_id, deals, src)
 
     if best_live:
         return best_live
@@ -391,12 +349,8 @@ def _find_closest_option(rows: list, target_strike: float,
         logger.warning("No priced %s option near strike %.0f — "
                        "using unpriced/baserate", side, target_strike)
         return best_any
-<<<<<<< HEAD
-    return {"strike": target_strike, "price": Decimal("0"), "delta": 0, "id": ""}
-=======
     return {"strike": target_strike, "price": 0, "delta": 0,
             "id": "", "deals": 0, "price_source": "none"}
->>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
 
 
 def _calculate_condor(base_index: float, interval_pct: float,
@@ -433,7 +387,7 @@ def _calculate_condor(base_index: float, interval_pct: float,
     lc_strike = _to_decimal(long_call["strike"])
     lp_strike = _to_decimal(long_put["strike"])
 
-    # Prices already come back as Decimal from _find_closest_option
+    # _find_closest_option returns float prices; convert to Decimal for exact arithmetic
     sc_price = short_call["price"] if isinstance(short_call["price"], Decimal) else _to_decimal(short_call["price"])
     sp_price = short_put["price"]  if isinstance(short_put["price"],  Decimal) else _to_decimal(short_put["price"])
     lc_price = long_call["price"]  if isinstance(long_call["price"],  Decimal) else _to_decimal(long_call["price"])
@@ -504,14 +458,6 @@ def _calculate_condor(base_index: float, interval_pct: float,
         if not premium_flag:
             premium_flag = "inverted_prices"
 
-<<<<<<< HEAD
-    # ── P&L metrics ─────────────────────────────────────────────────
-    max_profit_d = total_net_premium * MULT
-    max_risk_d   = (actual_wing_max * MULT) - max_profit_d
-    rr_ratio     = float((max_risk_d / max_profit_d).quantize(
-        Decimal("0.0001"), rounding=ROUND_HALF_EVEN
-    )) if max_profit_d > ZERO else 0.0
-=======
     # ------------------------------------------------------------------
     # Liquidity assessment: count how many of the 4 legs were actually
     # traded today (dealsno > 0).  When most legs use stale/baserate
@@ -528,11 +474,12 @@ def _calculate_condor(base_index: float, interval_pct: float,
     elif not premium_flag and live_legs <= 1:
         premium_flag = "partial_liquidity"
 
-    # Use actual wing width for risk calculation (not fixed WING_WIDTH)
-    max_profit = total_net_premium * TASE_MULTIPLIER
-    max_risk   = (actual_wing_max * TASE_MULTIPLIER) - max_profit
-    rr_ratio   = round(max_risk / max_profit, 4) if max_profit > 0 else 0
->>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
+    # ── P&L metrics ─────────────────────────────────────────────────
+    max_profit_d = total_net_premium * MULT
+    max_risk_d   = (actual_wing_max * MULT) - max_profit_d
+    rr_ratio     = float((max_risk_d / max_profit_d).quantize(
+        Decimal("0.0001"), rounding=ROUND_HALF_EVEN
+    )) if max_profit_d > ZERO else 0.0
 
     breakeven_upper = sc_strike + total_net_premium
     breakeven_lower = sp_strike - total_net_premium
@@ -710,9 +657,6 @@ def run_strategy(tase_live_index: float = 0.0):
         logger.error("Strategy: no live data available — aborting")
         return False
 
-<<<<<<< HEAD
-    base_index = _get_base_index(rows)
-=======
     # 2. Get base index — priority: TASE direct → Supabase → Yahoo → ATM
     base_index = 0.0
     if tase_live_index and 1000 <= tase_live_index <= 10000:
@@ -720,7 +664,6 @@ def run_strategy(tase_live_index: float = 0.0):
         logger.info("Base index from TASE direct API: %.2f", base_index)
     if base_index <= 0:
         base_index = _get_base_index(rows)
->>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
     if not (1000 <= base_index <= 10000):
         logger.error("Strategy: base index %.2f outside TA-35 sane range "
                      "[1000, 10000] — aborting to prevent corrupt strategies",
@@ -735,9 +678,6 @@ def run_strategy(tase_live_index: float = 0.0):
         if exp:
             expiry_groups.setdefault(exp, []).append(row)
 
-<<<<<<< HEAD
-    future_expiries = sorted(e for e in expiry_groups if e > trigger_date)
-=======
     # 4. Filter expiry dates: ONLY this week (Mon-Fri), future only.
     #    The data pipeline collects expiries up to 10 days ahead, but
     #    strategies must be limited to the CURRENT trading week —
@@ -752,7 +692,6 @@ def run_strategy(tase_live_index: float = 0.0):
         if e > trigger_date
         and monday.isoformat() <= e <= friday.isoformat()
     )
->>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
 
     if not future_expiries:
         logger.warning("Strategy: no future expiry dates in current week "
@@ -814,9 +753,6 @@ def settle_expiry(expiry_date_iso: str, tase_open_price: float = 0.0):
     logger.info("=" * 50)
     logger.info("SETTLEMENT ENGINE — %s", expiry_date_iso)
 
-<<<<<<< HEAD
-    index_close = _fetch_settlement_price()
-=======
     # 1. Get settlement price — priority chain:
     #    a) TASE direct opening price (passed by main.py)
     #    b) Yahoo Finance regularMarketOpen
@@ -827,7 +763,6 @@ def settle_expiry(expiry_date_iso: str, tase_open_price: float = 0.0):
         logger.info("Settlement price (TASE direct open): %.2f", index_close)
     if index_close <= 0:
         index_close = _fetch_settlement_price()  # Yahoo fallback
->>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
     if index_close <= 0:
         rows = _read_live_data()
         for row in rows:

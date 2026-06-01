@@ -90,10 +90,9 @@ def seconds_until_next_open(now: datetime) -> int:
 # cycle is never blocked by strategy computation)
 # ------------------------------------------------------------------
 
-def _run_strategy_thread(strat_key: str) -> None:
+def _run_strategy_thread(strat_key: str, tase_live_index: float = 0.0) -> None:
     try:
-<<<<<<< HEAD
-        result = strategy_engine.run_strategy()
+        result = strategy_engine.run_strategy(tase_live_index=tase_live_index)
         if result:
             db.state_set(strat_key)
             logger.info("Strategy saved — state marker set")
@@ -101,18 +100,6 @@ def _run_strategy_thread(strat_key: str) -> None:
             logger.warning("Strategy returned False")
     except Exception as se:
         logger.error("Strategy engine error: %s", se, exc_info=True)
-=======
-        page.goto(TASE_PAGE, wait_until="networkidle",
-                  timeout=PAGE_TIMEOUT)
-        logger.info("TASE page loaded (networkidle)")
-    except Exception:
-        logger.warning("networkidle timeout — using domcontentloaded")
-        page.goto(TASE_PAGE, wait_until="domcontentloaded",
-                  timeout=PAGE_TIMEOUT)
-        time.sleep(RENDER_WAIT + 4)
-    time.sleep(RENDER_WAIT)
-
-
 def recover_session(pw, browser, context, page):
     try:
         page.reload(wait_until="networkidle", timeout=PAGE_TIMEOUT)
@@ -518,7 +505,6 @@ def is_last_trading_day_of_week(now: datetime, expiry_dates: list) -> bool:
         if future.weekday() in TRADING_DAYS:
             return False
     return True
->>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
 
 
 # ------------------------------------------------------------------
@@ -574,25 +560,6 @@ def main():
         logger.critical("Cannot connect to Supabase — exiting")
         sys.exit(1)
 
-<<<<<<< HEAD
-    browser_born             = time.monotonic()
-    strategy_triggered_week  = None
-    settled_today            = None
-    weekly_summary_week      = None
-    weekly_backup_week       = None
-    daily_summary_date       = None
-    history_copied_date      = None
-    current_day              = None
-    consecutive_failures     = 0
-    crash_alerted            = False
-    daily_cycles             = 0
-    daily_rows               = 0
-    daily_errors             = 0
-    daily_expiries           = 0
-    last_known_expiries: list = []
-    weekly_summary_due_at    = None
-    current_week             = datetime.now(TZ_ISRAEL).isocalendar()[1]
-=======
     browser_born = time.monotonic()
     strategy_triggered_week = None   # track which week the strategy ran
     settled_today = None             # track which date we settled
@@ -617,7 +584,6 @@ def main():
     recent_row_counts: list = []     # rolling window of last N cycles' row counts
     quality_alert_date = None        # date we last sent a data-quality alert
                                      # (rate-limit: at most one per day)
->>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
 
     with sync_playwright() as pw:
         browser, context, page = _browser.launch(pw, HEADLESS)
@@ -727,9 +693,6 @@ def main():
                     if cycle_expiries:
                         last_known_expiries = cycle_expiries
 
-<<<<<<< HEAD
-                # ── Strategy trigger (async — does not block scraping) ─
-=======
                     # ── Data-quality monitoring ──
                     # Assess this cycle BEFORE adding it to the rolling
                     # window (so the anomaly check compares against the
@@ -782,7 +745,6 @@ def main():
                 # any time the table was wiped.  Without this gate,
                 # a Friday restart re-fires the strategy with Friday
                 # prices instead of Monday's.
->>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
                 if (ok
                         and STRATEGY_WINDOW_OPEN <= now.time() <= STRATEGY_WINDOW_CLOSE
                         and strategy_triggered_week != current_week):
@@ -801,39 +763,17 @@ def main():
                         strategy_triggered_week = current_week
                     else:
                         en, _ = DAY_NAMES.get(now.weekday(), ("?", "?"))
-<<<<<<< HEAD
                         logger.info(
                             "*** %s %s — triggering Iron Condor strategy "
                             "(week %d) ***", en, now.strftime("%H:%M"), current_week)
+                        _tase_idx = _get_tase_last_rate(page)
                         threading.Thread(
                             target=_run_strategy_thread,
-                            args=(strat_key,),
+                            args=(strat_key, _tase_idx),
                             daemon=True,
                             name="strategy",
                         ).start()
-                        # Optimistic — strategy_engine deduplicates via
-                        # _strategies_exist_for_week on restart.
                         strategy_triggered_week = current_week
-=======
-                        logger.info("*** %s %s — triggering Iron Condor strategy (week %d) ***",
-                                    en, now.strftime("%H:%M"), current_week)
-                        try:
-                            tase_idx = _get_tase_last_rate(page)
-                            result = strategy_engine.run_strategy(
-                                tase_live_index=tase_idx)
-                            if result:
-                                db.state_set(strat_key)
-                                strategy_triggered_week = current_week
-                                logger.info("Strategy triggered successfully — "
-                                            "won't retry this week")
-                            else:
-                                logger.warning("Strategy returned False — "
-                                               "will retry next cycle in window")
-                        except Exception as se:
-                            logger.error("Strategy engine error: %s — "
-                                         "will retry next cycle in window",
-                                         se, exc_info=True)
->>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
 
                 # ── Settlement ────────────────────────────────────────
                 if (ok
