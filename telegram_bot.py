@@ -104,6 +104,27 @@ def alert_crash(error_msg: str = ""):
 
 
 # ------------------------------------------------------------------
+# 1b. WEEKLY HEARTBEAT (first trading day, ~10:00)
+# ------------------------------------------------------------------
+
+def alert_weekly_heartbeat(date_str: str, rows: int, expiries: int,
+                           index_value: float = 0):
+    """First-trading-day 'system alive' notification.
+    Sent once per week after the first successful cycle."""
+    idx_line = f"\U0001F4CA TA-35: `{index_value:,.2f}`\n" if index_value > 0 else ""
+    text = (
+        f"✅ *Pipeline — תחילת שבוע*\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"המערכת פעילה ואוספת נתונים.\n"
+        f"\U0001F4C5 {date_str}\n"
+        f"{idx_line}"
+        f"\U0001F4C4 {rows:,} שורות | {expiries} פקיעות\n"
+        f"\U0001F680 אסטרטגיות ישוגרו ב-12:00"
+    )
+    send_message(text)
+
+
+# ------------------------------------------------------------------
 # 2. STRATEGY LAUNCH (weekly, with entry details)
 # ------------------------------------------------------------------
 

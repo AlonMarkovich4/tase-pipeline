@@ -671,6 +671,29 @@ def main():
                     if cycle_expiries:
                         last_known_expiries = cycle_expiries
 
+                # Weekly heartbeat: first successful cycle of the week
+                # after 10:00, on the first trading day.  A quick
+                # "system alive" Telegram so the user knows data is
+                # flowing before the strategy fires at 12:00.
+                if (ok
+                        and now.time() >= SETTLEMENT_AFTER  # 10:00
+                        and strategy_triggered_week != current_week):
+                    hb_key = f"weekly_heartbeat:{now.isocalendar()[0]}-W{current_week:02d}"
+                    if not db.state_is_set(hb_key):
+                        if not db.has_history_earlier_this_week(today_iso):
+                            logger.info("*** Sending weekly heartbeat ***")
+                            _hb_index = 0.0
+                            try:
+                                _hb_index = strategy_engine._fetch_index_from_yahoo()
+                            except Exception:
+                                pass
+                            telegram_bot.alert_weekly_heartbeat(
+                                today_iso, cycle_result["rows"],
+                                cycle_result["expiries"],
+                                index_value=_hb_index,
+                            )
+                            db.state_set(hb_key)
+
                 # Weekly strategy trigger: first cycle with data
                 # inside the 12:00-13:00 window, on the FIRST trading
                 # day of the week.  We must verify day-of-week because
