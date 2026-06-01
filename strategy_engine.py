@@ -659,15 +659,32 @@ def run_strategy(tase_live_index: float = 0.0):
         if exp:
             expiry_groups.setdefault(exp, []).append(row)
 
-    # 4. Filter only future expiry dates (Tue-Fri of this week)
+    # 4. Filter expiry dates: ONLY this week (Mon-Fri), future only.
+    #    The data pipeline collects expiries up to 10 days ahead, but
+    #    strategies must be limited to the CURRENT trading week —
+    #    next-week expiries carry weekend risk (events, gaps) that
+    #    makes Monday pricing unreliable for them.
+    trigger_d = date.fromisoformat(trigger_date)
+    monday = trigger_d - timedelta(days=trigger_d.weekday())  # Mon of this week
+    friday = monday + timedelta(days=4)                        # Fri of this week
+
     future_expiries = sorted(
-        e for e in expiry_groups if e > trigger_date
+        e for e in expiry_groups
+        if e > trigger_date
+        and monday.isoformat() <= e <= friday.isoformat()
     )
 
     if not future_expiries:
-        logger.warning("Strategy: no future expiry dates found")
+        logger.warning("Strategy: no future expiry dates in current week "
+                       "(Mon %s — Fri %s)", monday, friday)
         return False
 
+    # Log what we kept vs what we filtered out
+    all_future = sorted(e for e in expiry_groups if e > trigger_date)
+    skipped = [e for e in all_future if e not in future_expiries]
+    if skipped:
+        logger.info("Strategy: skipped %d next-week expiries: %s",
+                    len(skipped), skipped)
     logger.info("Expiry dates for strategy: %s", future_expiries)
 
     # 5. Calculate all variations
