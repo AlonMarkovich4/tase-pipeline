@@ -326,6 +326,33 @@ section[data-testid="stSidebar"] {{ min-width: 280px !important; }}
     color: #B0B5BB; font-size: 13px; margin-top: 6px;
 }}
 
+/* ── Recommendation card (Home page) ── */
+.rec-card {{
+    background: {C_CARD};
+    border: 1px solid {C_BORDER};
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin: 8px 0;
+    direction: ltr;
+}}
+.rec-card.top {{ border-left: 4px solid {C_GREEN}; }}
+.rec-card .rec-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}}
+.rec-card .rec-stats {{
+    display: flex;
+    gap: 18px;
+    align-items: center;
+}}
+.rec-card .rec-stats span {{
+    color: {C_DIM};
+    font-size: 12px;
+}}
+
 /* ── Section Header ── */
 .section-hdr {{
     color: {C_TEXT};
@@ -1646,20 +1673,19 @@ if nav_page == "🏠 Home":
             is_pref = pct in preferred
             pref_tag = ' · <span style="color:#00E676;">מועדף ✓</span>' if is_pref else ""
             medal = medals[i] if i < len(medals) else "•"
+            top_cls = " top" if i == 0 else ""
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
-                f'border-left:4px solid {C_GREEN if i==0 else C_BORDER};'
-                f'border-radius:12px;padding:14px 18px;margin:8px 0;">'
-                f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">'
+                f'<div class="rec-card{top_cls}">'
+                f'<div class="rec-header">'
                 f'<div><span style="font-size:18px;">{medal}</span> '
                 f'<span style="color:{C_TEXT};font-weight:800;font-size:16px;">{pct:.1f}%</span>'
                 f'<span style="color:{C_DIM};font-size:12px;margin-right:8px;"> {sp:,.0f}—{sc:,.0f}</span>{pref_tag}</div>'
-                f'<div style="display:flex;gap:18px;align-items:center;">'
-                f'<span style="color:{C_DIM};font-size:12px;">ציון <strong style="color:{C_BLUE};font-size:15px;">{item["score"]}</strong></span>'
-                f'<span style="color:{C_DIM};font-size:12px;">סיכוי <strong style="color:{C_TEXT};">{item["win"]*100:.0f}%</strong></span>'
-                f'<span style="color:{C_DIM};font-size:12px;">פרמיה <strong style="color:{C_TEXT};">{prem:,.1f}</strong></span>'
-                f'<span style="color:{C_GREEN};font-size:12px;">+{mprofit:,.0f}₪</span>'
-                f'<span style="color:{C_RED};font-size:12px;">-{mrisk:,.0f}₪</span>'
+                f'<div class="rec-stats">'
+                f'<span>ציון <strong style="color:{C_BLUE};font-size:15px;">{item["score"]}</strong></span>'
+                f'<span>סיכוי <strong style="color:{C_TEXT};">{item["win"]*100:.0f}%</strong></span>'
+                f'<span>פרמיה <strong style="color:{C_TEXT};">{prem:,.1f}</strong></span>'
+                f'<span style="color:{C_GREEN};">+{mprofit:,.0f}₪</span>'
+                f'<span style="color:{C_RED};">-{mrisk:,.0f}₪</span>'
                 f'</div></div></div>', unsafe_allow_html=True)
             dname = f"IC {pct:.1f}% (auto)"
             in_demo = (str(rec_meta["expiry"]), dname) in _open_demo_keys
@@ -2321,12 +2347,11 @@ elif nav_page == "🕹️ Demo Trading":
             st.markdown("---")
     else:
         st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
-            f'padding:40px 20px;text-align:center;margin:12px 0;">'
-            f'<div style="font-size:36px;margin-bottom:8px;">💼</div>'
-            f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;">אין פוזיציות פתוחות</div>'
-            f'<div style="color:{C_DIM};font-size:13px;margin-top:4px;">'
-            f'בנה אסטרטגיה למעלה ושגר לתיק הדמו</div></div>',
+            '<div class="empty-state">'
+            '<div class="es-icon">💼</div>'
+            '<div class="es-title">אין פוזיציות פתוחות</div>'
+            '<div class="es-sub">בנה אסטרטגיה למעלה ושגר לתיק הדמו</div>'
+            '</div>',
             unsafe_allow_html=True)
 
     # ── Closed trades ──

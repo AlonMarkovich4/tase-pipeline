@@ -92,6 +92,7 @@ def seconds_until_next_open(now: datetime) -> int:
 
 def _run_strategy_thread(strat_key: str) -> None:
     try:
+<<<<<<< HEAD
         result = strategy_engine.run_strategy()
         if result:
             db.state_set(strat_key)
@@ -100,6 +101,461 @@ def _run_strategy_thread(strat_key: str) -> None:
             logger.warning("Strategy returned False")
     except Exception as se:
         logger.error("Strategy engine error: %s", se, exc_info=True)
+=======
+        page.goto(TASE_PAGE, wait_until="networkidle",
+                  timeout=PAGE_TIMEOUT)
+        logger.info("TASE page loaded (networkidle)")
+    except Exception:
+        logger.warning("networkidle timeout — using domcontentloaded")
+        page.goto(TASE_PAGE, wait_until="domcontentloaded",
+                  timeout=PAGE_TIMEOUT)
+        time.sleep(RENDER_WAIT + 4)
+    time.sleep(RENDER_WAIT)
+
+
+def recover_session(pw, browser, context, page):
+    try:
+        page.reload(wait_until="networkidle", timeout=PAGE_TIMEOUT)
+        time.sleep(RENDER_WAIT)
+        if _get_expiry_dates(page):
+            logger.info("Session recovered via reload")
+            return browser, context, page
+    except Exception:
+        pass
+
+    logger.warning("Full browser restart...")
+    saved_cookies = []
+    try:
+        saved_cookies = context.cookies()
+    except Exception:
+        pass
+    try:
+        browser.close()
+    except Exception:
+        pass
+    browser, context, page = launch_browser(pw)
+    if saved_cookies:
+        try:
+            context.add_cookies(saved_cookies)
+            logger.info("Restored %d cookies after recovery",
+                        len(saved_cookies))
+        except Exception:
+            pass
+    return browser, context, page
+
+
+# ------------------------------------------------------------------
+# TASE index API — TA-35 live data fetched via Playwright (same
+# session that already passed the Imperva WAF).  This gives us the
+# REAL opening price for settlement and the live last-traded value,
+# directly from the exchange — no Yahoo proxy needed.
+# ------------------------------------------------------------------
+def _get_tase_last_rate(page=None) -> float:
+    """Get the live TA-35 index value from the latest Supabase snapshot.
+
+    TASE embeds the live index inside the Put/Call data (UnderlingAsset_call),
+    which run_cycle injects into every row.  Reading it back from Supabase
+    gives us the authoritative TASE value without a separate API call
+    (the standalone TASE index endpoint is blocked by Imperva WAF).
+
+    `page` is accepted for signature compatibility but unused.
+    Returns 0.0 on failure.
+    """
+    try:
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        if not base or not key:
+            return 0.0
+        import httpx as _httpx
+        url = (f"{base}/rest/v1/tase_putcall"
+               f"?select=underlingasset_call&order=id.desc&limit=20")
+        r = _httpx.get(url, headers={"apikey": key,
+                                     "Authorization": f"Bearer {key}"},
+                       timeout=10)
+        if r.status_code in (200, 206):
+            for row in r.json():
+                raw = row.get("underlingasset_call")
+                if raw in (None, "", 0):
+                    continue
+                try:
+                    v = float(str(raw).replace(",", ""))
+                    if 1000 <= v <= 10000:
+                        return v
+                except (ValueError, TypeError):
+                    continue
+    except Exception as e:
+        logger.warning("_get_tase_last_rate error: %s", e)
+    return 0.0
+
+
+# ------------------------------------------------------------------
+# TASE API helpers — Put/Call data
+# ------------------------------------------------------------------
+
+def _get_expiry_dates(page, max_retries: int = 3) -> list:
+    js = """
+    async (url) => {
+        try {
+            const r = await fetch(url + "?objId=01&lang=0&dType=2&date=", {
+                headers: {
+                    "Accept": "application/json, text/plain, */*",
+                    "Content-Type": "application/json;charset=UTF-8"
+                }
+            });
+            if (r.status !== 200) return { error: "status_" + r.status };
+            return { data: await r.json() };
+        } catch(e) { return { error: e.message }; }
+    }
+    """
+    result = None
+    for attempt in range(1, max_retries + 1):
+        result = page.evaluate(js, EXPIRY_URL)
+        if not result.get("error"):
+            break
+        wait = min(5 * (2 ** (attempt - 1)), 45)  # 5s, 10s, 20s
+        logger.warning("Expiry-dates API (attempt %d/%d): %s — retry in %ds",
+                       attempt, max_retries, result["error"], wait)
+        if attempt < max_retries:
+            time.sleep(wait)
+
+    if result.get("error"):
+        logger.warning("Expiry-dates API failed after %d attempts: %s",
+                       max_retries, result["error"])
+        return []
+
+    items = (result.get("data") or {}).get(
+        "DerivativeExpirationDateItems", []
+    )
+
+    # Accept any weekly expiry from today through the next ~10 days.
+    # This handles the LAST-TRADING-DAY case (e.g. Friday after 09:30)
+    # where this week's expiries already settled and TASE only returns
+    # next week's.  A sliding window from today (instead of fixed
+    # Mon-Fri of the current ISO week) prevents the "empty list" bug
+    # that caused 4 consecutive failures on Fri 29/05.
+    today = datetime.now(TZ_ISRAEL).date()
+    window_end = today + timedelta(days=10)
+
+    dates = []
+    for it in items:
+        if it.get("ExpirationDateType") != "01":
+            continue
+        raw = it.get("Date", "")
+        try:
+            d = date(int(raw[6:10]), int(raw[3:5]), int(raw[0:2]))
+            if today <= d <= window_end:
+                dates.append(d)
+        except (ValueError, IndexError):
+            continue
+    return sorted(dates)
+
+
+def _fetch_all_pages(page, expr_date_iso: str):
+    all_items = []
+    page_num = 1
+    trade_date = None
+    asset_name = None
+    underlying_value = None
+
+    while True:
+        js = """
+        async (p) => {
+            try {
+                const r = await fetch(p.url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json;charset=UTF-8",
+                        "Accept": "application/json, text/plain, */*",
+                        "Accept-Language": "he-IL"
+                    },
+                    body: JSON.stringify({
+                        inQType:  1,
+                        dType:    "2",
+                        updType:  "1",
+                        d:        "",
+                        exprDate: p.exprDate,
+                        qType:    "3",
+                        objId:    "01",
+                        TotalRec: p.totalRec,
+                        pageNum:  p.pageNum,
+                        lang:     "0"
+                    })
+                });
+                if (r.status !== 200) return {error: "status_" + r.status};
+                return {data: await r.json()};
+            } catch(e) { return {error: e.message}; }
+        }
+        """
+        result = None
+        for attempt in range(1, 4):
+            result = page.evaluate(js, {
+                "url":      API_URL,
+                "exprDate": expr_date_iso,
+                "totalRec": 1 if page_num == 1 else len(all_items),
+                "pageNum":  page_num,
+            })
+            if not result.get("error"):
+                break
+            wait = min(5 * (2 ** (attempt - 1)), 30)
+            logger.warning("putvscall page %d (attempt %d/3): %s — retry in %ds",
+                           page_num, attempt, result["error"], wait)
+            if attempt < 3:
+                time.sleep(wait)
+
+        if result.get("error"):
+            logger.warning("putvscall page %d failed after 3 attempts: %s",
+                           page_num, result["error"])
+            break
+
+        data  = result.get("data", {})
+        items = data.get("Items", [])
+        total = data.get("TotalRec", 0)
+        trade_date = trade_date or data.get("TradeDate")
+        asset_name = asset_name or data.get("AssetName")
+
+        # Capture underlying asset value.  TASE embeds the live TA-35
+        # index inside EACH item as "UnderlingAsset_call"/"_put" — this
+        # is the authoritative exchange value (e.g. "4423.44"), present
+        # on every row.  We read it from the first item that has it.
+        if underlying_value is None and items:
+            for it in items:
+                for field in ("UnderlingAsset_call", "UnderlingAsset_put",
+                              "UnderlingAsset_Call", "UnderlingAsset_Put"):
+                    raw = it.get(field)
+                    if raw in (None, "", 0):
+                        continue
+                    try:
+                        v = float(str(raw).replace(",", ""))
+                        if 1000 <= v <= 10000:
+                            underlying_value = v
+                            logger.info(
+                                "   TA-35 from TASE item field '%s': %.2f",
+                                field, v)
+                            break
+                    except (ValueError, TypeError):
+                        continue
+                if underlying_value is not None:
+                    break
+
+        if not items:
+            break
+
+        # Log ALL keys from the first item (once) so we know exactly
+        # what TASE returns — especially bid/ask fields we might be
+        # discarding.  This is a diagnostic log, not a code change.
+        if page_num == 1 and len(all_items) == 0 and items:
+            item_keys = sorted(items[0].keys())
+            logger.info("   ITEM KEYS (%d fields): %s", len(item_keys), item_keys)
+
+        all_items.extend(items)
+        logger.info("   page %d: %d records (%d/%d)",
+                     page_num, len(items), len(all_items), total)
+
+        if len(all_items) >= total:
+            break
+        page_num += 1
+        # Minimal pause between pages of SAME expiry — TASE WAF is
+        # tolerant of intra-expiry pagination. Inter-expiry delay is
+        # still 3-5s (random) in run_cycle.
+        time.sleep(0.15)
+
+    return all_items, trade_date, asset_name, underlying_value
+
+
+# ------------------------------------------------------------------
+# Single fetch cycle
+# ------------------------------------------------------------------
+
+def run_cycle(page, cycle_time: datetime):
+    date_str = cycle_time.strftime("%Y-%m-%d")
+    time_str = cycle_time.strftime("%H:%M")
+
+    expiry_dates = _get_expiry_dates(page)
+    if not expiry_dates:
+        logger.warning("No expiry dates — skipping cycle")
+        return {"ok": False, "rows": 0, "expiries": 0}
+
+    logger.info("Expiry dates: %s",
+                [d.isoformat() for d in expiry_dates])
+
+    # ── Live TA-35 index.
+    # TASE's putvscall API exposes an UnderlingAsset_call field, but in
+    # practice it arrives empty — so Yahoo Finance is the working source.
+    # We fetch it ONCE up front so it's always available to inject into
+    # every row (the column must never be null for the dashboard/engine).
+    # If a future TASE response DOES contain a real underlying, the
+    # per-expiry loop below overrides the cycle value with it.
+    cycle_index_source = "yahoo_fallback"
+    cycle_underlying = 0.0
+    try:
+        import strategy_engine as _se
+        cycle_underlying = _se._fetch_index_from_yahoo()
+    except Exception as ye:
+        logger.warning("Yahoo index fetch failed: %s", ye)
+
+    success_count = 0
+    total_rows = 0
+
+    for idx, exp_date in enumerate(expiry_dates):
+        exp_iso = exp_date.isoformat()
+        wd = exp_date.weekday()
+        en, he = DAY_NAMES.get(wd, (f"Day{wd}", f"Day{wd}"))
+
+        logger.info(">> %s (%s) %s", en, he, exp_iso)
+
+        items, trade_dt, asset, underlying = _fetch_all_pages(
+            page, exp_iso,
+        )
+
+        # If TASE actually provided a real underlying, prefer it (it's
+        # the authoritative exchange value).
+        if underlying and underlying > 0:
+            if cycle_index_source != "tase":
+                logger.info("TA-35 from TASE (authoritative): %.2f", underlying)
+            cycle_underlying = underlying
+            cycle_index_source = "tase"
+
+        # Inject underlying into every row so the column is populated
+        # for strategy_engine / dashboard.
+        effective_underlying = underlying or cycle_underlying
+        if effective_underlying and items:
+            for item in items:
+                if not item.get("UnderlingAsset_Call"):
+                    item["UnderlingAsset_Call"] = effective_underlying
+                if not item.get("UnderlingAsset_Put"):
+                    item["UnderlingAsset_Put"] = effective_underlying
+
+        if items:
+            # Sanity checks — warn on suspicious data
+            bad = 0
+            for item in items:
+                sc = item.get("ExpirationPrice_Call")
+                sp = item.get("ExpirationPrice_Put")
+                if sc is not None and (not isinstance(sc, (int, float)) or sc <= 0):
+                    bad += 1
+                if sp is not None and (not isinstance(sp, (int, float)) or sp <= 0):
+                    bad += 1
+            if bad:
+                logger.warning("   ⚠ %d items with invalid strike prices", bad)
+            if len(items) > 500:
+                logger.warning("   ⚠ Unusually large response: %d items", len(items))
+
+            if db.upsert_items(date_str, time_str, exp_iso,
+                               trade_dt, items):
+                success_count += 1
+            total_rows += len(items)
+            logger.info("   [OK] %d records", len(items))
+        else:
+            db.upsert_no_trading(date_str, time_str, exp_iso)
+            logger.info("   [EMPTY] no trading")
+
+        if idx < len(expiry_dates) - 1:
+            time.sleep(random.uniform(3, 5))
+
+    # Only clean up old snapshots when ALL expiries succeeded.  A partial
+    # cycle would otherwise erase older complete snapshots and leave the
+    # strategy engine with an incomplete view.
+    if success_count == len(expiry_dates) and success_count > 0:
+        db._clear_old_snapshots(date_str, time_str)
+    elif 0 < success_count < len(expiry_dates):
+        logger.warning(
+            "Partial cycle (%d/%d expiries) — skipping cleanup to preserve "
+            "previous complete snapshot",
+            success_count, len(expiry_dates))
+
+    return {
+        "ok": success_count > 0,
+        "rows": total_rows,
+        "expiries": len(expiry_dates),
+        "expiry_dates": expiry_dates,  # actual TASE trading days this week
+        "full_success": success_count == len(expiry_dates),
+        "index_value": cycle_underlying,
+        "index_source": cycle_index_source,  # "tase" | "yahoo_fallback"
+    }
+
+
+def is_last_cycle(now: datetime) -> bool:
+    """Check if the next cycle would be outside trading hours."""
+    next_cycle = now + timedelta(seconds=FETCH_INTERVAL)
+    return next_cycle.time() > MARKET_CLOSE
+
+
+def is_last_trading_day_of_week(now: datetime, expiry_dates: list) -> bool:
+    """
+    True if today is the LAST trading day of the current ISO week.
+
+    Two-tier detection:
+      1. PRIMARY: TASE expiry dates as ground truth — the last expiry
+         of the week is the last trading day.  Robust to one-off holidays
+         (e.g., Pesach week with no Friday expiry).
+      2. FALLBACK (no expiry data cached yet): scan the calendar — today
+         is the last trading day iff today is a trading day AND no later
+         day in this ISO week is a trading day per TRADING_DAYS.
+    """
+    today = now.date()
+    this_week = (now.isocalendar()[0], now.isocalendar()[1])
+
+    # ── PRIMARY: TASE expiry dates ──
+    if expiry_dates:
+        week_expiries = [
+            d for d in expiry_dates
+            if (d.isocalendar()[0], d.isocalendar()[1]) == this_week
+        ]
+        if week_expiries:
+            return today == max(week_expiries)
+        # expiry list exists but none in this week → no trading this week
+        return False
+
+    # ── FALLBACK: calendar scan based on TRADING_DAYS ──
+    if today.weekday() not in TRADING_DAYS:
+        return False
+    # Walk forward day by day; if any later day in this ISO week is a
+    # trading day, today is NOT the last.
+    for days_ahead in range(1, 8):
+        future = today + timedelta(days=days_ahead)
+        if (future.isocalendar()[0], future.isocalendar()[1]) != this_week:
+            break  # crossed into next ISO week
+        if future.weekday() in TRADING_DAYS:
+            return False
+    return True
+>>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
+
+
+# ------------------------------------------------------------------
+# Data-quality monitoring
+# ------------------------------------------------------------------
+
+def assess_cycle_quality(cycle_result: dict, recent_rows: list) -> list:
+    """Inspect a cycle result and recent history; return a list of
+    human-readable Hebrew issue strings (empty = healthy).
+
+    Detects:
+      • Partial expiry collection (not all expiries succeeded)
+      • Row-count anomaly (this cycle collected far fewer rows than
+        the recent average — possible truncated/blocked response)
+
+    Note: the TA-35 index normally comes from Yahoo (TASE's putvscall
+    API returns an empty UnderlingAsset field), so Yahoo usage is NOT
+    treated as an anomaly.
+    """
+    issues = []
+
+    # 1. Partial expiry collection
+    if not cycle_result.get("full_success", True):
+        issues.append(
+            f"איסוף חלקי — לא כל הפקיעות נקלטו "
+            f"({cycle_result.get('expiries', 0)} פקיעות)")
+
+    # 2. Row-count anomaly vs recent average
+    rows_now = cycle_result.get("rows", 0)
+    if recent_rows and rows_now > 0:
+        avg = sum(recent_rows) / len(recent_rows)
+        if avg > 0 and rows_now < avg * 0.6:
+            issues.append(
+                f"ירידה חדה בכמות נתונים — {rows_now} שורות "
+                f"(ממוצע אחרון {avg:.0f})")
+
+    return issues
 
 
 # ------------------------------------------------------------------
@@ -118,6 +574,7 @@ def main():
         logger.critical("Cannot connect to Supabase — exiting")
         sys.exit(1)
 
+<<<<<<< HEAD
     browser_born             = time.monotonic()
     strategy_triggered_week  = None
     settled_today            = None
@@ -135,6 +592,32 @@ def main():
     last_known_expiries: list = []
     weekly_summary_due_at    = None
     current_week             = datetime.now(TZ_ISRAEL).isocalendar()[1]
+=======
+    browser_born = time.monotonic()
+    strategy_triggered_week = None   # track which week the strategy ran
+    settled_today = None             # track which date we settled
+    weekly_summary_week = None       # track which week got summary
+    weekly_backup_week = None        # track which week got backup
+    daily_summary_date = None        # track which date got daily summary
+    history_copied_date = None       # track which date got copied to history
+    current_day = None               # track current day for counter resets
+    consecutive_failures = 0         # crash detection counter
+    crash_alerted = False            # True once a crash alert was sent for
+                                     # the current failure streak (prevents
+                                     # re-alerting every cycle)
+    daily_cycles = 0                 # cycles completed today
+    daily_rows = 0                   # rows collected today
+    daily_errors = 0                 # errors today
+    daily_expiries = 0               # expiry dates seen today
+    last_known_expiries: list = []   # cache of TASE expiry dates this week
+    weekly_summary_due_at = None     # datetime when post-close summary fires
+    current_week = datetime.now(TZ_ISRAEL).isocalendar()[1]  # init before loop
+                                     # so the off-hours weekly-summary block can
+                                     # reference it even on a fresh off-hours start
+    recent_row_counts: list = []     # rolling window of last N cycles' row counts
+    quality_alert_date = None        # date we last sent a data-quality alert
+                                     # (rate-limit: at most one per day)
+>>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
 
     with sync_playwright() as pw:
         browser, context, page = _browser.launch(pw, HEADLESS)
@@ -244,7 +727,62 @@ def main():
                     if cycle_expiries:
                         last_known_expiries = cycle_expiries
 
+<<<<<<< HEAD
                 # ── Strategy trigger (async — does not block scraping) ─
+=======
+                    # ── Data-quality monitoring ──
+                    # Assess this cycle BEFORE adding it to the rolling
+                    # window (so the anomaly check compares against the
+                    # prior baseline, not itself).
+                    quality_issues = assess_cycle_quality(
+                        cycle_result, recent_row_counts)
+                    if quality_issues and quality_alert_date != today_iso:
+                        logger.warning("Data-quality issues: %s", quality_issues)
+                        try:
+                            telegram_bot.alert_data_quality(quality_issues)
+                            quality_alert_date = today_iso  # at most 1/day
+                        except Exception as qe:
+                            logger.error("Quality alert failed: %s", qe)
+                    # Update rolling window (keep last 10 cycles)
+                    rows_now = cycle_result.get("rows", 0)
+                    if rows_now > 0:
+                        recent_row_counts.append(rows_now)
+                        if len(recent_row_counts) > 10:
+                            recent_row_counts.pop(0)
+
+                # Weekly heartbeat: first successful cycle of the week
+                # after 10:00, on the first trading day.  A quick
+                # "system alive" Telegram so the user knows data is
+                # flowing before the strategy fires at 12:00.
+                if (ok
+                        and now.time() >= SETTLEMENT_AFTER  # 10:00
+                        and strategy_triggered_week != current_week):
+                    hb_key = f"weekly_heartbeat:{now.isocalendar()[0]}-W{current_week:02d}"
+                    if not db.state_is_set(hb_key):
+                        if not db.has_history_earlier_this_week(today_iso):
+                            logger.info("*** Sending weekly heartbeat ***")
+                            _hb_index = _get_tase_last_rate(page)
+                            if _hb_index <= 0:
+                                try:
+                                    _hb_index = strategy_engine._fetch_index_from_yahoo()
+                                except Exception:
+                                    pass
+                            telegram_bot.alert_weekly_heartbeat(
+                                today_iso, cycle_result["rows"],
+                                cycle_result["expiries"],
+                                index_value=_hb_index,
+                            )
+                            db.state_set(hb_key)
+
+                # Weekly strategy trigger: first cycle with data
+                # inside the 12:00-13:00 window, on the FIRST trading
+                # day of the week.  We must verify day-of-week because
+                # `strategy_triggered_week` is in-memory and clears on
+                # restart, and `_strategies_exist_for_week` is False
+                # any time the table was wiped.  Without this gate,
+                # a Friday restart re-fires the strategy with Friday
+                # prices instead of Monday's.
+>>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
                 if (ok
                         and STRATEGY_WINDOW_OPEN <= now.time() <= STRATEGY_WINDOW_CLOSE
                         and strategy_triggered_week != current_week):
@@ -263,6 +801,7 @@ def main():
                         strategy_triggered_week = current_week
                     else:
                         en, _ = DAY_NAMES.get(now.weekday(), ("?", "?"))
+<<<<<<< HEAD
                         logger.info(
                             "*** %s %s — triggering Iron Condor strategy "
                             "(week %d) ***", en, now.strftime("%H:%M"), current_week)
@@ -275,6 +814,26 @@ def main():
                         # Optimistic — strategy_engine deduplicates via
                         # _strategies_exist_for_week on restart.
                         strategy_triggered_week = current_week
+=======
+                        logger.info("*** %s %s — triggering Iron Condor strategy (week %d) ***",
+                                    en, now.strftime("%H:%M"), current_week)
+                        try:
+                            tase_idx = _get_tase_last_rate(page)
+                            result = strategy_engine.run_strategy(
+                                tase_live_index=tase_idx)
+                            if result:
+                                db.state_set(strat_key)
+                                strategy_triggered_week = current_week
+                                logger.info("Strategy triggered successfully — "
+                                            "won't retry this week")
+                            else:
+                                logger.warning("Strategy returned False — "
+                                               "will retry next cycle in window")
+                        except Exception as se:
+                            logger.error("Strategy engine error: %s — "
+                                         "will retry next cycle in window",
+                                         se, exc_info=True)
+>>>>>>> 544cc8bd3322f823af6237cf1c010230221b2c70
 
                 # ── Settlement ────────────────────────────────────────
                 if (ok
@@ -290,6 +849,9 @@ def main():
                         try:
                             if strategy_engine.has_unsettled_strategies(today_iso):
                                 logger.info("*** Settling expiry %s ***", today_iso)
+                                # Settlement uses the opening price. The standalone
+                                # TASE index API (with openRate) is WAF-blocked, so
+                                # settle_expiry falls back to Yahoo's regularMarketOpen.
                                 result = strategy_engine.settle_expiry(today_iso)
                                 if result:
                                     db.state_set(settle_key)
