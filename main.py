@@ -436,12 +436,19 @@ def run_cycle(page, cycle_time: datetime):
                 [d.isoformat() for d in expiry_dates])
 
     # ── Live TA-35 index.
-    # TASE is the AUTHORITATIVE source — it IS the exchange that prices
-    # the index.  TASE embeds the live value inside the Put/Call items
-    # (UnderlingAsset_call), so we capture it from the per-expiry fetch
-    # below.  Yahoo is an emergency fallback ONLY (less accurate).
+    # TASE's putvscall API exposes an UnderlingAsset_call field, but in
+    # practice it arrives empty — so Yahoo Finance is the working source.
+    # We fetch it ONCE up front so it's always available to inject into
+    # every row (the column must never be null for the dashboard/engine).
+    # If a future TASE response DOES contain a real underlying, the
+    # per-expiry loop below overrides the cycle value with it.
+    cycle_index_source = "yahoo_fallback"
     cycle_underlying = 0.0
-    cycle_index_source = "tase"
+    try:
+        import strategy_engine as _se
+        cycle_underlying = _se._fetch_index_from_yahoo()
+    except Exception as ye:
+        logger.warning("Yahoo index fetch failed: %s", ye)
 
     success_count = 0
     total_rows = 0
@@ -457,14 +464,16 @@ def run_cycle(page, cycle_time: datetime):
             page, exp_iso,
         )
 
-        # First valid TASE underlying becomes this cycle's index value
-        if cycle_underlying <= 0 and underlying and underlying > 0:
+        # If TASE actually provided a real underlying, prefer it (it's
+        # the authoritative exchange value).
+        if underlying and underlying > 0:
+            if cycle_index_source != "tase":
+                logger.info("TA-35 from TASE (authoritative): %.2f", underlying)
             cycle_underlying = underlying
-            logger.info("TA-35 from TASE (authoritative): %.2f", cycle_underlying)
+            cycle_index_source = "tase"
 
-        # Inject underlying asset value into each item so it's
-        # stored in Supabase and available for strategy_engine /
-        # dashboard.  Priority: this expiry's TASE value → cycle value.
+        # Inject underlying into every row so the column is populated
+        # for strategy_engine / dashboard.
         effective_underlying = underlying or cycle_underlying
         if effective_underlying and items:
             for item in items:
@@ -499,20 +508,6 @@ def run_cycle(page, cycle_time: datetime):
 
         if idx < len(expiry_dates) - 1:
             time.sleep(random.uniform(3, 5))
-
-    # Emergency fallback: if TASE never gave us an underlying value this
-    # cycle (very rare), fall back to Yahoo so downstream still has an index.
-    if cycle_underlying <= 0:
-        cycle_index_source = "yahoo_fallback"
-        try:
-            import strategy_engine as _se
-            cycle_underlying = _se._fetch_index_from_yahoo()
-            if cycle_underlying > 0:
-                logger.warning(
-                    "⚠ TA-35 from YAHOO FALLBACK (%.2f) — TASE underlying "
-                    "missing this cycle. Less accurate.", cycle_underlying)
-        except Exception as ye:
-            logger.warning("Live index Yahoo fallback failed: %s", ye)
 
     # Only clean up old snapshots when ALL expiries succeeded.  A partial
     # cycle would otherwise erase older complete snapshots and leave the
@@ -591,24 +586,23 @@ def assess_cycle_quality(cycle_result: dict, recent_rows: list) -> list:
     human-readable Hebrew issue strings (empty = healthy).
 
     Detects:
-      • Yahoo fallback in use (TASE index unavailable)
       • Partial expiry collection (not all expiries succeeded)
       • Row-count anomaly (this cycle collected far fewer rows than
         the recent average — possible truncated/blocked response)
+
+    Note: the TA-35 index normally comes from Yahoo (TASE's putvscall
+    API returns an empty UnderlingAsset field), so Yahoo usage is NOT
+    treated as an anomaly.
     """
     issues = []
 
-    # 1. Index source — Yahoo fallback means TASE index API failed
-    if cycle_result.get("index_source") == "yahoo_fallback":
-        issues.append("מדד TA-35 נשלף מ-Yahoo (גיבוי) — TASE לא זמין")
-
-    # 2. Partial expiry collection
+    # 1. Partial expiry collection
     if not cycle_result.get("full_success", True):
         issues.append(
             f"איסוף חלקי — לא כל הפקיעות נקלטו "
             f"({cycle_result.get('expiries', 0)} פקיעות)")
 
-    # 3. Row-count anomaly vs recent average
+    # 2. Row-count anomaly vs recent average
     rows_now = cycle_result.get("rows", 0)
     if recent_rows and rows_now > 0:
         avg = sum(recent_rows) / len(recent_rows)
