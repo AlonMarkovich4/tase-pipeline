@@ -10,12 +10,19 @@ Wing Width = 20 points
 Intervals: 0.5%, 1.0%, 1.5%, 2.0%, 2.5%, 3.0%, 3.5%, 4.0%
 """
 
-import os
 import json
 import logging
+import os
+from decimal import Decimal, ROUND_HALF_EVEN, getcontext, InvalidOperation
 from datetime import datetime, date, timedelta
+from typing import Optional
+
+# 12 significant digits — well beyond what NIS options pricing requires and
+# sufficient to represent exact ILS cent amounts up to ₪10B without loss.
+getcontext().prec = 12
 
 import httpx
+import supabase_client as _sc
 import telegram_bot
 from config import (
     TZ_ISRAEL, TASE_MULTIPLIER, WING_WIDTH, INTERVALS,
@@ -24,24 +31,28 @@ from config import (
 
 logger = logging.getLogger("tase_pipeline")
 
-_base_url: str = ""
-_api_key:  str = ""
-_cached_headers: dict = {}
+_table: str = ""
+
+# Columns the strategy engine actually needs — avoids pulling all ~40 cols
+# per row on every strategy cycle (M-3: reduce SELECT * payload).
+_STRATEGY_COLS = (
+    "expiry_date,fetch_date,fetch_time,"
+    "expirationprice_call,lastrate_call,delta_call,"
+    "derivativeid_call,underlingasset_call,"
+    "expirationprice_put,lastrate_put,delta_put,"
+    "derivativeid_put,underlingasset_put"
+)
 
 
 def _init():
-    global _base_url, _api_key, _cached_headers
-    _base_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    _api_key  = os.environ.get("SUPABASE_KEY", "")
-    _cached_headers = {
-        "apikey":        _api_key,
-        "Authorization": f"Bearer {_api_key}",
-        "Content-Type":  "application/json",
-    }
+    global _table
+    _sc.ensure_init()
+    _table = os.environ.get("SUPABASE_TABLE", "tase_putcall")
 
 
-def _headers() -> dict:
-    return _cached_headers.copy()
+def _ensure_init():
+    if not _table:
+        _init()
 
 
 def _clean_numeric(val) -> float:
@@ -59,22 +70,34 @@ def _clean_numeric(val) -> float:
         return 0.0
 
 
+def _to_decimal(val) -> Decimal:
+    """Convert any numeric value to Decimal via string to avoid inheriting
+    float imprecision.  Returns Decimal('0') for missing/invalid inputs."""
+    if isinstance(val, Decimal):
+        return val
+    cleaned = _clean_numeric(val)
+    try:
+        return Decimal(str(cleaned))
+    except InvalidOperation:
+        return Decimal("0")
+
+
 def _read_live_data() -> list:
-    """Read all rows from tase_putcall (live table) with pagination."""
+    """Read required columns from tase_putcall (live table) with pagination."""
+    _ensure_init()
     all_rows = []
-    batch = 1000
-    offset = 0
+    batch    = 1000
+    offset   = 0
 
     while True:
-        url = (f"{_base_url}/rest/v1/tase_putcall"
-               f"?select=*&order=id&limit={batch}&offset={offset}")
+        url = _sc.rest_url(
+            f"{_table}?select={_STRATEGY_COLS}"
+            f"&order=id&limit={batch}&offset={offset}"
+        )
         try:
-            h = _headers()
-            h["Range-Unit"] = "items"
-            r = httpx.get(url, headers=h, timeout=30)
+            r = httpx.get(url, headers=_sc.headers(), timeout=30)
             if r.status_code not in (200, 206):
-                logger.error("Strategy: read live data failed: %d",
-                             r.status_code)
+                logger.error("Strategy: read live data failed: %d", r.status_code)
                 break
             rows = r.json()
             if not rows:
@@ -90,9 +113,9 @@ def _read_live_data() -> list:
     return all_rows
 
 
-_yahoo_cache: dict = {}
+_yahoo_cache:    dict  = {}
 _yahoo_cache_ts: float = 0.0
-_YAHOO_CACHE_TTL = 300  # 5 minutes — Yahoo data can change intraday
+_YAHOO_CACHE_TTL = 300  # 5 minutes
 
 
 def _fetch_yahoo_meta() -> dict:
@@ -108,9 +131,7 @@ def _fetch_yahoo_meta() -> dict:
     url = ("https://query1.finance.yahoo.com/v8/finance/chart/TA35.TA"
            "?interval=1d&range=1d")
     try:
-        r = httpx.get(url, timeout=10, headers={
-            "User-Agent": "Mozilla/5.0",
-        })
+        r = httpx.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code == 200:
             data = r.json()
             meta = (data.get("chart", {})
@@ -122,13 +143,12 @@ def _fetch_yahoo_meta() -> dict:
             return meta
     except Exception as e:
         logger.warning("Yahoo Finance fetch failed: %s", e)
-    # Return stale cache if available rather than empty (better than nothing)
     return _yahoo_cache if _yahoo_cache else {}
 
 
 def _fetch_index_from_yahoo() -> float:
     """Fetch TA-35 live index value from Yahoo Finance API."""
-    meta = _fetch_yahoo_meta()
+    meta  = _fetch_yahoo_meta()
     price = meta.get("regularMarketPrice", 0)
     if price and price > 0:
         logger.info("TA-35 index from Yahoo Finance: %.2f", price)
@@ -142,7 +162,7 @@ def _fetch_settlement_price() -> float:
     TASE options settle on the opening price of expiry day.
     Yahoo Finance 'regularMarketOpen' is the closest available proxy.
     """
-    meta = _fetch_yahoo_meta()
+    meta       = _fetch_yahoo_meta()
     open_price = meta.get("regularMarketOpen", 0)
     if open_price and open_price > 0:
         logger.info("Settlement price (Yahoo open): %.2f", open_price)
@@ -159,45 +179,55 @@ def _get_base_index(rows: list) -> float:
     Get the TA-35 base index value.
 
     Priority:
-    1. underlingasset from the LATEST snapshot only (filtered by fetch_date+fetch_time)
+    1. underlingasset from the LATEST snapshot (filtered by fetch_date+fetch_time)
     2. Yahoo Finance API (real-time fallback)
     3. ATM delta inference (delta closest to 50)
     4. Strike range midpoint (last resort)
 
     Range-validated: rejects values outside 1000-10000 (TA-35 sane range).
+
+    M-4: first pass collects latest_key, ATM-delta candidate, and sane strikes
+    simultaneously, reducing total iterations from 4 down to 2 worst-case.
     """
     SANE_MIN, SANE_MAX = 1000.0, 10000.0
 
     def _is_sane(v: float) -> bool:
         return SANE_MIN <= v <= SANE_MAX
 
-    # Method 1: latest snapshot only (avoid stale rows from earlier fetches)
-    # Find the most recent fetch_date+fetch_time pair in the data
-    latest_key = None
+    # Pass 1: find latest snapshot key, best ATM strike, and all sane strikes
+    latest_key                      = None
+    best_delta_diff, best_atm_strike = float("inf"), 0.0
+    sane_strikes: list              = []
+
     for row in rows:
-        fd = row.get("fetch_date", "")
-        ft = row.get("fetch_time", "")
+        fd, ft = row.get("fetch_date", ""), row.get("fetch_time", "")
         if fd and ft:
             key = (fd, ft)
             if latest_key is None or key > latest_key:
                 latest_key = key
 
+        delta  = _clean_numeric(row.get("delta_call"))
+        strike = _clean_numeric(row.get("expirationprice_call"))
+        if strike > 0 and 0 < delta < 100:
+            diff = abs(delta - 50.0)
+            if diff < best_delta_diff:
+                best_delta_diff, best_atm_strike = diff, strike
+        if _is_sane(strike):
+            sane_strikes.append(strike)
+
+    # Method 1: latest snapshot underlyingasset (pass 2 — filtered)
     if latest_key:
         for row in rows:
             if (row.get("fetch_date"), row.get("fetch_time")) != latest_key:
                 continue
-            v = _clean_numeric(row.get("underlingasset_call"))
-            if _is_sane(v):
-                logger.info("Base index from underlingasset_call "
-                            "(%s %s): %.2f", latest_key[0], latest_key[1], v)
-                return v
-            v = _clean_numeric(row.get("underlingasset_put"))
-            if _is_sane(v):
-                logger.info("Base index from underlingasset_put "
-                            "(%s %s): %.2f", latest_key[0], latest_key[1], v)
-                return v
-        logger.warning("Latest snapshot (%s %s) has no valid underlying — "
-                       "falling back", latest_key[0], latest_key[1])
+            for col in ("underlingasset_call", "underlingasset_put"):
+                v = _clean_numeric(row.get(col))
+                if _is_sane(v):
+                    logger.info("Base index from %s (%s %s): %.2f",
+                                col, latest_key[0], latest_key[1], v)
+                    return v
+        logger.warning("Latest snapshot (%s %s) has no valid underlying — falling back",
+                       latest_key[0], latest_key[1])
 
     # Method 2: Yahoo Finance API
     val = _fetch_index_from_yahoo()
@@ -206,32 +236,16 @@ def _get_base_index(rows: list) -> float:
     if val > 0:
         logger.warning("Yahoo returned out-of-range value: %.2f — skipping", val)
 
-    # Method 3: infer from ATM call (delta closest to 50)
-    logger.info("Falling back to ATM delta inference")
-    best_strike = 0.0
-    best_diff = float("inf")
-    for row in rows:
-        delta = _clean_numeric(row.get("delta_call"))
-        strike = _clean_numeric(row.get("expirationprice_call"))
-        if strike > 0 and 0 < delta < 100:
-            diff = abs(delta - 50.0)
-            if diff < best_diff:
-                best_diff = diff
-                best_strike = strike
-
-    if _is_sane(best_strike):
+    # Method 3: ATM delta inference (pre-computed in pass 1)
+    if _is_sane(best_atm_strike):
         logger.info("Base index from ATM delta: %.2f (diff=%.1f)",
-                    best_strike, best_diff)
-        return best_strike
+                    best_atm_strike, best_delta_diff)
+        return best_atm_strike
 
-    # Method 4: midpoint of strike range
-    strikes = [_clean_numeric(row.get("expirationprice_call"))
-               for row in rows]
-    strikes = [s for s in strikes if _is_sane(s)]
-    if strikes:
-        midpoint = (min(strikes) + max(strikes)) / 2.0
-        logger.warning("Base index from strike midpoint (last resort): %.2f",
-                       midpoint)
+    # Method 4: midpoint of strike range (pre-computed in pass 1)
+    if sane_strikes:
+        midpoint = (min(sane_strikes) + max(sane_strikes)) / 2.0
+        logger.warning("Base index from strike midpoint (last resort): %.2f", midpoint)
         return midpoint
 
     return 0.0
@@ -239,7 +253,7 @@ def _get_base_index(rows: list) -> float:
 
 def _find_closest_option(rows: list, target_strike: float,
                          side: str,
-                         exclude_strikes: set | None = None) -> dict:
+                         exclude_strikes: Optional[set] = None) -> dict:
     """
     Find the option closest to target_strike that has an actual
     trading price (lastrate > 0).  Falls back to closest without
@@ -251,15 +265,18 @@ def _find_closest_option(rows: list, target_strike: float,
     if exclude_strikes is None:
         exclude_strikes = set()
 
-    best_priced = None
+    best_priced      = None
     best_priced_diff = float("inf")
-    best_any = None
-    best_any_diff = float("inf")
+    best_any         = None
+    best_any_diff    = float("inf")
 
     strike_col = f"expirationprice_{side}"
     price_col  = f"lastrate_{side}"
     delta_col  = f"delta_{side}"
     id_col     = f"derivativeid_{side}"
+
+    _MULTIPLIER_D = Decimal(str(TASE_MULTIPLIER))
+    _SANITY_D     = Decimal(str(PRICE_SANITY_MAX_PTS))
 
     for row in rows:
         strike = _clean_numeric(row.get(strike_col))
@@ -267,42 +284,35 @@ def _find_closest_option(rows: list, target_strike: float,
             continue
         if strike in exclude_strikes:
             continue
-        # TASE API returns lastrate in ₪ per contract (points × multiplier)
-        # Divide by multiplier to convert to index points
-        price = _clean_numeric(row.get(price_col)) / TASE_MULTIPLIER
-        diff = abs(strike - target_strike)
+        # Use Decimal division so the price-per-point is exact (avoids the
+        # float rounding in `lastrate / 50` that accumulates across all legs).
+        price_raw = _clean_numeric(row.get(price_col))
+        price     = Decimal(str(price_raw)) / _MULTIPLIER_D
+        diff      = abs(strike - target_strike)
 
-        # ----------------------------------------------------------
-        # Price sanity: reject options whose price exceeds the
-        # central PRICE_SANITY_MAX_PTS threshold from config.
-        # OTM options in our strike range should not exceed this;
-        # higher quotes are stale/theoretical TASE artifacts.
-        # ----------------------------------------------------------
-        if price > 0 and price > PRICE_SANITY_MAX_PTS:
+        if price > 0 and price > _SANITY_D:
             logger.debug(
-                "Skipping %s strike %.0f: price %.2f pts exceeds "
+                "Skipping %s strike %.0f: price %.4f pts exceeds "
                 "sanity limit (%.0f pts) — likely stale/theoretical",
-                side, strike, price, PRICE_SANITY_MAX_PTS)
+                side, strike, float(price), PRICE_SANITY_MAX_PTS)
             continue
 
-        # Track closest with a real price
         if price > 0 and diff < best_priced_diff:
             best_priced_diff = diff
             best_priced = {
-                "strike":  strike,
-                "price":   price,
-                "delta":   _clean_numeric(row.get(delta_col)),
-                "id":      row.get(id_col, ""),
+                "strike": strike,
+                "price":  price,   # Decimal
+                "delta":  _clean_numeric(row.get(delta_col)),
+                "id":     row.get(id_col, ""),
             }
 
-        # Track closest regardless (fallback)
         if diff < best_any_diff:
             best_any_diff = diff
             best_any = {
-                "strike":  strike,
-                "price":   price,
-                "delta":   _clean_numeric(row.get(delta_col)),
-                "id":      row.get(id_col, ""),
+                "strike": strike,
+                "price":  price,   # Decimal
+                "delta":  _clean_numeric(row.get(delta_col)),
+                "id":     row.get(id_col, ""),
             }
 
     if best_priced:
@@ -311,129 +321,132 @@ def _find_closest_option(rows: list, target_strike: float,
         logger.warning("No priced %s option near strike %.0f — "
                        "using unpriced (lastrate=0)", side, target_strike)
         return best_any
-    return {"strike": target_strike, "price": 0, "delta": 0, "id": ""}
+    return {"strike": target_strike, "price": Decimal("0"), "delta": 0, "id": ""}
 
 
 def _calculate_condor(base_index: float, interval_pct: float,
                       rows_for_expiry: list, expiry_date: str,
                       trigger_date: str, trigger_time: str) -> dict:
-    """Calculate one Iron Condor variation."""
+    """Calculate one Iron Condor variation using Decimal arithmetic throughout
+    to eliminate floating-point accumulation in premium and P&L figures."""
 
-    offset = base_index * (interval_pct / 100.0)
+    # All financial arithmetic happens in Decimal; convert to float only at
+    # the final return dict (JSON / Supabase boundary).
+    BASE    = _to_decimal(base_index)
+    PCT     = _to_decimal(interval_pct)
+    MULT    = Decimal(str(TASE_MULTIPLIER))
+    WING    = Decimal(str(WING_WIDTH))
+    ZERO    = Decimal("0")
 
-    # Short strikes
-    short_call_strike = base_index + offset
-    short_put_strike  = base_index - offset
+    offset = BASE * (PCT / Decimal("100"))
 
-    # Long (protection) strikes — 20 points away
-    long_call_strike = short_call_strike + WING_WIDTH
-    long_put_strike  = short_put_strike - WING_WIDTH
+    short_call_strike_target = float(BASE + offset)
+    short_put_strike_target  = float(BASE - offset)
+    long_call_strike_target  = short_call_strike_target + WING_WIDTH
+    long_put_strike_target   = short_put_strike_target  - WING_WIDTH
 
-    # Find closest real options (Short first, then Long excludes Short's strike)
-    short_call = _find_closest_option(rows_for_expiry, short_call_strike, "call")
-    short_put  = _find_closest_option(rows_for_expiry, short_put_strike, "put")
-    long_call  = _find_closest_option(rows_for_expiry, long_call_strike, "call",
+    short_call = _find_closest_option(rows_for_expiry, short_call_strike_target, "call")
+    short_put  = _find_closest_option(rows_for_expiry, short_put_strike_target,  "put")
+    long_call  = _find_closest_option(rows_for_expiry, long_call_strike_target,  "call",
                                       exclude_strikes={short_call["strike"]})
-    long_put   = _find_closest_option(rows_for_expiry, long_put_strike, "put",
+    long_put   = _find_closest_option(rows_for_expiry, long_put_strike_target,   "put",
                                       exclude_strikes={short_put["strike"]})
 
-    # ------------------------------------------------------------------
-    # Validate strike order: LP < SP < SC < LC
-    # If matching produced invalid order, force correct spacing
-    # ------------------------------------------------------------------
-    if short_put["strike"] >= short_call["strike"]:
+    # Convert matched strikes / prices to Decimal for all subsequent math
+    sc_strike = _to_decimal(short_call["strike"])
+    sp_strike = _to_decimal(short_put["strike"])
+    lc_strike = _to_decimal(long_call["strike"])
+    lp_strike = _to_decimal(long_put["strike"])
+
+    # Prices already come back as Decimal from _find_closest_option
+    sc_price = short_call["price"] if isinstance(short_call["price"], Decimal) else _to_decimal(short_call["price"])
+    sp_price = short_put["price"]  if isinstance(short_put["price"],  Decimal) else _to_decimal(short_put["price"])
+    lc_price = long_call["price"]  if isinstance(long_call["price"],  Decimal) else _to_decimal(long_call["price"])
+    lp_price = long_put["price"]   if isinstance(long_put["price"],   Decimal) else _to_decimal(long_put["price"])
+
+    # ── Strike order validation ──────────────────────────────────────
+    if sp_strike >= sc_strike:
         logger.warning(
             "Invalid strike order: SP(%.0f) >= SC(%.0f) at %.1f%% — "
             "forcing symmetric from base %.0f",
-            short_put["strike"], short_call["strike"],
-            interval_pct, base_index)
-        short_put["strike"] = base_index - offset
-        short_call["strike"] = base_index + offset
+            float(sp_strike), float(sc_strike), interval_pct, base_index)
+        sp_strike = BASE - offset
+        sc_strike = BASE + offset
 
-    if long_put["strike"] >= short_put["strike"]:
-        long_put["strike"] = short_put["strike"] - WING_WIDTH
+    if lp_strike >= sp_strike:
+        lp_strike = sp_strike - WING
 
-    if long_call["strike"] <= short_call["strike"]:
-        long_call["strike"] = short_call["strike"] + WING_WIDTH
+    if lc_strike <= sc_strike:
+        lc_strike = sc_strike + WING
 
-    # Actual wing widths (may differ from WING_WIDTH after matching)
-    actual_wing_put  = short_put["strike"] - long_put["strike"]
-    actual_wing_call = long_call["strike"] - short_call["strike"]
+    actual_wing_put  = sp_strike - lp_strike
+    actual_wing_call = lc_strike - sc_strike
     actual_wing_max  = max(actual_wing_put, actual_wing_call)
 
-    # Net premium
-    raw_net_premium = (
-        (short_call["price"] + short_put["price"])
-        - (long_call["price"] + long_put["price"])
-    )
+    # ── Net premium ─────────────────────────────────────────────────
+    raw_net_premium = (sc_price + sp_price) - (lc_price + lp_price)
 
-    # ------------------------------------------------------------------
-    # IRON CONDOR INVARIANT: net premium can NEVER exceed wing width.
-    # Premium > wing means guaranteed profit regardless of index —
-    # this is financially impossible and indicates corrupt prices
-    # (stale/theoretical lastrate from TASE for illiquid OTM options).
-    # ------------------------------------------------------------------
     premium_flag = ""
 
     if raw_net_premium > actual_wing_max:
         logger.warning(
-            "   %.1f%% %s: IMPOSSIBLE premium %.2f pts > wing %.2f pts — "
+            "   %.1f%% %s: IMPOSSIBLE premium %.4f pts > wing %.4f pts — "
             "capping to wing (TASE prices likely stale/theoretical). "
-            "Legs: SC=%.0f@%.2f LC=%.0f@%.2f SP=%.0f@%.2f LP=%.0f@%.2f",
-            interval_pct, expiry_date, raw_net_premium, actual_wing_max,
-            short_call["strike"], short_call["price"],
-            long_call["strike"], long_call["price"],
-            short_put["strike"], short_put["price"],
-            long_put["strike"], long_put["price"])
+            "Legs: SC=%.0f@%.4f LC=%.0f@%.4f SP=%.0f@%.4f LP=%.0f@%.4f",
+            interval_pct, expiry_date,
+            float(raw_net_premium), float(actual_wing_max),
+            float(sc_strike), float(sc_price),
+            float(lc_strike), float(lc_price),
+            float(sp_strike), float(sp_price),
+            float(lp_strike), float(lp_price))
         total_net_premium = actual_wing_max
         premium_flag = "price_capped"
-    elif raw_net_premium < 0:
+    elif raw_net_premium < ZERO:
         total_net_premium = raw_net_premium
         premium_flag = "negative_premium"
         logger.info(
-            "   %.1f%% %s: negative premium %.2f — "
+            "   %.1f%% %s: negative premium %.4f — "
             "this interval costs money to enter (not tradeable)",
-            interval_pct, expiry_date, raw_net_premium)
+            interval_pct, expiry_date, float(raw_net_premium))
     else:
         total_net_premium = raw_net_premium
 
-    # ------------------------------------------------------------------
-    # Per-leg sanity: a long option should NEVER cost more than its
-    # corresponding short option (they share the same side, long is
-    # further OTM).  Flag but don't reject — the cap above handles P&L.
-    # ------------------------------------------------------------------
-    if long_put["price"] > short_put["price"] and short_put["price"] > 0:
+    if lp_price > sp_price and sp_price > ZERO:
         logger.warning(
-            "   %.1f%% %s: Long Put %.0f@%.2f > Short Put %.0f@%.2f "
+            "   %.1f%% %s: Long Put %.0f@%.4f > Short Put %.0f@%.4f "
             "(inverted prices)", interval_pct, expiry_date,
-            long_put["strike"], long_put["price"],
-            short_put["strike"], short_put["price"])
+            float(lp_strike), float(lp_price),
+            float(sp_strike), float(sp_price))
         if not premium_flag:
             premium_flag = "inverted_prices"
 
-    if long_call["price"] > short_call["price"] and short_call["price"] > 0:
+    if lc_price > sc_price and sc_price > ZERO:
         logger.warning(
-            "   %.1f%% %s: Long Call %.0f@%.2f > Short Call %.0f@%.2f "
+            "   %.1f%% %s: Long Call %.0f@%.4f > Short Call %.0f@%.4f "
             "(inverted prices)", interval_pct, expiry_date,
-            long_call["strike"], long_call["price"],
-            short_call["strike"], short_call["price"])
+            float(lc_strike), float(lc_price),
+            float(sc_strike), float(sc_price))
         if not premium_flag:
             premium_flag = "inverted_prices"
 
-    # Use actual wing width for risk calculation (not fixed WING_WIDTH)
-    max_profit = total_net_premium * TASE_MULTIPLIER
-    max_risk   = (actual_wing_max * TASE_MULTIPLIER) - max_profit
-    rr_ratio   = round(max_risk / max_profit, 4) if max_profit > 0 else 0
+    # ── P&L metrics ─────────────────────────────────────────────────
+    max_profit_d = total_net_premium * MULT
+    max_risk_d   = (actual_wing_max * MULT) - max_profit_d
+    rr_ratio     = float((max_risk_d / max_profit_d).quantize(
+        Decimal("0.0001"), rounding=ROUND_HALF_EVEN
+    )) if max_profit_d > ZERO else 0.0
 
-    # Break-even points
-    breakeven_upper = short_call["strike"] + total_net_premium
-    breakeven_lower = short_put["strike"] - total_net_premium
+    breakeven_upper = sc_strike + total_net_premium
+    breakeven_lower = sp_strike - total_net_premium
 
-    # Days to expiry
+    def _q2(d: Decimal) -> float:
+        """Round to 2 dp using banker's rounding and return as float."""
+        return float(d.quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN))
+
     try:
-        exp_d = date.fromisoformat(expiry_date)
+        exp_d  = date.fromisoformat(expiry_date)
         trig_d = date.fromisoformat(trigger_date)
-        dte = (exp_d - trig_d).days
+        dte    = (exp_d - trig_d).days
     except Exception:
         dte = 0
 
@@ -442,61 +455,64 @@ def _calculate_condor(base_index: float, interval_pct: float,
     return {
         "trigger_date":       trigger_date,
         "trigger_time":       trigger_time,
-        "base_index_value":   round(base_index, 2),
+        "base_index_value":   _q2(BASE),
         "expiry_date":        expiry_date,
         "expiry_day_name":    DAY_NAMES_EN.get(exp_weekday, ""),
         "interval_pct":       interval_pct,
 
-        "short_call_strike":  round(short_call["strike"], 2),
-        "long_call_strike":   round(long_call["strike"], 2),
-        "short_put_strike":   round(short_put["strike"], 2),
-        "long_put_strike":    round(long_put["strike"], 2),
+        "short_call_strike":  _q2(sc_strike),
+        "long_call_strike":   _q2(lc_strike),
+        "short_put_strike":   _q2(sp_strike),
+        "long_put_strike":    _q2(lp_strike),
 
         "short_call_id":      short_call["id"],
         "long_call_id":       long_call["id"],
         "short_put_id":       short_put["id"],
         "long_put_id":        long_put["id"],
 
-        "short_call_price":   round(short_call["price"], 2),
-        "long_call_price":    round(long_call["price"], 2),
-        "short_put_price":    round(short_put["price"], 2),
-        "long_put_price":     round(long_put["price"], 2),
+        "short_call_price":   _q2(sc_price),
+        "long_call_price":    _q2(lc_price),
+        "short_put_price":    _q2(sp_price),
+        "long_put_price":     _q2(lp_price),
 
         "short_call_delta":   round(short_call["delta"], 4),
-        "short_put_delta":    round(short_put["delta"], 4),
-        "long_call_delta":    round(long_call["delta"], 4),
-        "long_put_delta":     round(long_put["delta"], 4),
+        "short_put_delta":    round(short_put["delta"],  4),
+        "long_call_delta":    round(long_call["delta"],  4),
+        "long_put_delta":     round(long_put["delta"],   4),
 
-        "total_net_premium":  round(total_net_premium, 2),
-        "max_profit_ils":     round(max_profit, 2),
-        "max_risk_ils":       round(max_risk, 2),
+        "total_net_premium":  _q2(total_net_premium),
+        "max_profit_ils":     _q2(max_profit_d),
+        "max_risk_ils":       _q2(max_risk_d),
         "risk_reward_ratio":  rr_ratio,
 
-        "breakeven_upper":    round(breakeven_upper, 2),
-        "breakeven_lower":    round(breakeven_lower, 2),
+        "breakeven_upper":    _q2(breakeven_upper),
+        "breakeven_lower":    _q2(breakeven_lower),
         "days_to_expiry":     dte,
         "wing_width":         WING_WIDTH,
-        "actual_wing_put":    round(actual_wing_put, 2),
-        "actual_wing_call":   round(actual_wing_call, 2),
+        "actual_wing_put":    _q2(actual_wing_put),
+        "actual_wing_call":   _q2(actual_wing_call),
         "premium_flag":       premium_flag,
     }
 
 
 def _strategies_exist_for_week(trigger_date: str) -> bool:
     """Check if strategies already exist for this ISO week."""
+    _ensure_init()
     try:
-        d = date.fromisoformat(trigger_date)
+        d      = date.fromisoformat(trigger_date)
         monday = d - timedelta(days=d.weekday())
         friday = monday + timedelta(days=4)
     except ValueError:
         return False
 
-    url = (f"{_base_url}/rest/v1/iron_condor_strategies"
-           f"?trigger_date=gte.{monday.isoformat()}"
-           f"&trigger_date=lte.{friday.isoformat()}"
-           f"&select=id&limit=1")
+    url = _sc.rest_url(
+        f"iron_condor_strategies"
+        f"?trigger_date=gte.{monday.isoformat()}"
+        f"&trigger_date=lte.{friday.isoformat()}"
+        f"&select=id&limit=1"
+    )
     try:
-        r = httpx.get(url, headers=_headers(), timeout=10)
+        r = httpx.get(url, headers=_sc.headers(), timeout=10)
         if r.status_code in (200, 206):
             return len(r.json()) > 0
     except Exception:
@@ -506,13 +522,15 @@ def _strategies_exist_for_week(trigger_date: str) -> bool:
 
 def has_unsettled_strategies(expiry_date_iso: str) -> bool:
     """Quick check: are there unsettled strategies for this expiry date?"""
-    _init()
-    url = (f"{_base_url}/rest/v1/iron_condor_strategies"
-           f"?expiry_date=eq.{expiry_date_iso}"
-           f"&result_status=is.null"
-           f"&select=id&limit=1")
+    _ensure_init()
+    url = _sc.rest_url(
+        f"iron_condor_strategies"
+        f"?expiry_date=eq.{expiry_date_iso}"
+        f"&result_status=is.null"
+        f"&select=id&limit=1"
+    )
     try:
-        r = httpx.get(url, headers=_headers(), timeout=10)
+        r = httpx.get(url, headers=_sc.headers(), timeout=10)
         if r.status_code in (200, 206):
             return len(r.json()) > 0
     except Exception:
@@ -524,21 +542,20 @@ def _save_strategies(strategies: list) -> bool:
     """Save all strategy rows to Supabase with UPSERT.
     Gracefully handles missing columns by retrying without them.
     """
-    url = (f"{_base_url}/rest/v1/iron_condor_strategies"
-           f"?on_conflict=trigger_date,expiry_date,interval_pct")
-    headers = _headers()
-    headers["Prefer"] = "resolution=merge-duplicates"
+    url     = _sc.rest_url(
+        "iron_condor_strategies"
+        "?on_conflict=trigger_date,expiry_date,interval_pct"
+    )
+    headers = _sc.headers(Prefer="resolution=merge-duplicates")
     payload = json.dumps(strategies, ensure_ascii=False)
 
     try:
-        r = httpx.post(url, headers=headers,
-                       content=payload, timeout=30)
+        r = httpx.post(url, headers=headers, content=payload, timeout=30)
         if r.status_code in (200, 201, 204):
             logger.info("Strategy: saved %d rows to iron_condor_strategies",
                         len(strategies))
             return True
 
-        # If columns don't exist yet, strip them and retry
         if r.status_code == 400 and "column" in r.text.lower():
             optional_cols = {"premium_flag", "actual_wing_put", "actual_wing_call"}
             stripped = [{k: v for k, v in s.items()
@@ -574,7 +591,7 @@ def run_strategy():
     and all percentage intervals, save to Supabase.
     """
     _init()
-    now = datetime.now(TZ_ISRAEL)
+    now          = datetime.now(TZ_ISRAEL)
     trigger_date = now.strftime("%Y-%m-%d")
     trigger_time = now.strftime("%H:%M")
 
@@ -582,19 +599,16 @@ def run_strategy():
     logger.info("IRON CONDOR STRATEGY ENGINE — START")
     logger.info("Trigger: %s %s", trigger_date, trigger_time)
 
-    # 0. Check if strategies already exist for today (prevent duplicates on restart)
     if _strategies_exist_for_week(trigger_date):
         logger.info("Strategy: already exists for %s — skipping (restart-safe)",
-                     trigger_date)
+                    trigger_date)
         return True
 
-    # 1. Read live data
     rows = _read_live_data()
     if not rows:
         logger.error("Strategy: no live data available — aborting")
         return False
 
-    # 2. Get base index — with strict sanity check
     base_index = _get_base_index(rows)
     if not (1000 <= base_index <= 10000):
         logger.error("Strategy: base index %.2f outside TA-35 sane range "
@@ -604,17 +618,13 @@ def run_strategy():
 
     logger.info("Base TA-35 index: %.2f", base_index)
 
-    # 3. Group rows by expiry date
-    expiry_groups = {}
+    expiry_groups: dict = {}
     for row in rows:
         exp = row.get("expiry_date", "")
         if exp:
             expiry_groups.setdefault(exp, []).append(row)
 
-    # 4. Filter only future expiry dates (Tue-Fri of this week)
-    future_expiries = sorted(
-        e for e in expiry_groups if e > trigger_date
-    )
+    future_expiries = sorted(e for e in expiry_groups if e > trigger_date)
 
     if not future_expiries:
         logger.warning("Strategy: no future expiry dates found")
@@ -622,7 +632,6 @@ def run_strategy():
 
     logger.info("Expiry dates for strategy: %s", future_expiries)
 
-    # 5. Calculate all variations
     all_strategies = []
     for exp_date in future_expiries:
         exp_rows = expiry_groups[exp_date]
@@ -641,12 +650,9 @@ def run_strategy():
                 condor["risk_reward_ratio"],
             )
 
-    # 6. Save to Supabase
     if all_strategies:
         _save_strategies(all_strategies)
-        telegram_bot.alert_strategy_launch(
-            base_index, all_strategies, future_expiries,
-        )
+        telegram_bot.alert_strategy_launch(base_index, all_strategies, future_expiries)
 
     logger.info("IRON CONDOR STRATEGY ENGINE — DONE (%d variations)",
                 len(all_strategies))
@@ -668,11 +674,8 @@ def settle_expiry(expiry_date_iso: str):
     logger.info("=" * 50)
     logger.info("SETTLEMENT ENGINE — %s", expiry_date_iso)
 
-    # 1. Get settlement price (opening price of expiry day)
     index_close = _fetch_settlement_price()
     if index_close <= 0:
-        # Fallback: try underlingasset from live data (skip Yahoo —
-        # _fetch_settlement_price already tried it)
         rows = _read_live_data()
         for row in rows:
             v = _clean_numeric(row.get("underlingasset_call"))
@@ -686,15 +689,14 @@ def settle_expiry(expiry_date_iso: str):
 
     logger.info("Settlement price: %.2f", index_close)
 
-    # 2. Read all strategies for this expiry date
-    url = (
-        f"{_base_url}/rest/v1/iron_condor_strategies"
+    url = _sc.rest_url(
+        f"iron_condor_strategies"
         f"?expiry_date=eq.{expiry_date_iso}"
         f"&result_status=is.null"
         f"&select=*"
     )
     try:
-        r = httpx.get(url, headers=_headers(), timeout=30)
+        r = httpx.get(url, headers=_sc.headers(), timeout=30)
         if r.status_code not in (200, 206):
             logger.error("Settlement: read strategies failed: %d", r.status_code)
             return False
@@ -705,91 +707,87 @@ def settle_expiry(expiry_date_iso: str):
 
     if not strategies:
         logger.info("Settlement: no unsettled strategies for %s", expiry_date_iso)
-        return False  # Don't mark as settled — strategies may be created later
+        return False
 
     logger.info("Settling %d strategies...", len(strategies))
 
-    # 3. Calculate actual P&L for each strategy
-    update_url = f"{_base_url}/rest/v1/iron_condor_strategies"
-    settled = 0
+    update_url = _sc.rest_url("iron_condor_strategies")
+    settled    = 0
+    MULT       = Decimal(str(TASE_MULTIPLIER))
+    WING_D     = Decimal(str(WING_WIDTH))
+    ZERO       = Decimal("0")
+    # Settlement price as Decimal — this is the most important number to get right
+    index_close_d = _to_decimal(index_close)
+
+    def _q2(d: Decimal) -> float:
+        return float(d.quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN))
 
     for s in strategies:
-        short_put  = _clean_numeric(s.get("short_put_strike"))
-        long_put   = _clean_numeric(s.get("long_put_strike"))
-        short_call = _clean_numeric(s.get("short_call_strike"))
-        long_call  = _clean_numeric(s.get("long_call_strike"))
-        raw_premium = _clean_numeric(s.get("total_net_premium"))
+        sp_d        = _to_decimal(s.get("short_put_strike"))
+        lp_d        = _to_decimal(s.get("long_put_strike"))
+        sc_d        = _to_decimal(s.get("short_call_strike"))
+        lc_d        = _to_decimal(s.get("long_call_strike"))
+        raw_prem_d  = _to_decimal(s.get("total_net_premium"))
 
-        # Use actual wing widths from saved data (fall back to constant)
-        wing_put  = _clean_numeric(s.get("actual_wing_put")) or (short_put - long_put) or WING_WIDTH
-        wing_call = _clean_numeric(s.get("actual_wing_call")) or (long_call - short_call) or WING_WIDTH
+        wing_put_d  = (_to_decimal(s.get("actual_wing_put"))
+                       or (sp_d - lp_d) or WING_D)
+        wing_call_d = (_to_decimal(s.get("actual_wing_call"))
+                       or (lc_d - sc_d) or WING_D)
 
-        # INVARIANT: cap net_premium to wing width at settlement too
-        wing_max = max(wing_put, wing_call)
-        if raw_premium > wing_max:
+        wing_max_d = max(wing_put_d, wing_call_d)
+        if raw_prem_d > wing_max_d:
             logger.warning(
-                "Settlement: %.1f%% premium %.2f > wing %.2f — capping",
-                _clean_numeric(s.get("interval_pct")), raw_premium, wing_max)
-            net_premium = wing_max
+                "Settlement: %.1f%% premium %.4f > wing %.4f — capping",
+                _clean_numeric(s.get("interval_pct")),
+                float(raw_prem_d), float(wing_max_d))
+            net_premium_d = wing_max_d
         else:
-            net_premium = raw_premium
+            net_premium_d = raw_prem_d
 
-        # Determine result
-        if short_put <= index_close <= short_call:
-            # Index inside short strikes — max profit
-            pnl_points = net_premium
-            status = "max_profit"
-
-        elif long_put <= index_close < short_put:
-            # Index between long put and short put — partial loss on put side
-            intrusion = short_put - index_close
-            pnl_points = net_premium - intrusion
-            status = "partial_loss_put"
-
-        elif short_call < index_close <= long_call:
-            # Index between short call and long call — partial loss on call side
-            intrusion = index_close - short_call
-            pnl_points = net_premium - intrusion
-            status = "partial_loss_call"
-
-        elif index_close < long_put:
-            # Index below long put — max loss on put side
-            pnl_points = net_premium - wing_put
-            status = "max_loss_put"
-
+        if sp_d <= index_close_d <= sc_d:
+            pnl_points_d = net_premium_d
+            status       = "max_profit"
+        elif lp_d <= index_close_d < sp_d:
+            pnl_points_d = net_premium_d - (sp_d - index_close_d)
+            status       = "partial_loss_put"
+        elif sc_d < index_close_d <= lc_d:
+            pnl_points_d = net_premium_d - (index_close_d - sc_d)
+            status       = "partial_loss_call"
+        elif index_close_d < lp_d:
+            pnl_points_d = net_premium_d - wing_put_d
+            status       = "max_loss_put"
         else:
-            # Index above long call — max loss on call side
-            pnl_points = net_premium - wing_call
-            status = "max_loss_call"
+            pnl_points_d = net_premium_d - wing_call_d
+            status       = "max_loss_call"
 
-        pnl_ils = round(pnl_points * TASE_MULTIPLIER, 2)
+        pnl_ils_d = pnl_points_d * MULT
 
-        # Store in memory for fallback Telegram report
-        s["_settled_pnl_ils"] = pnl_ils
-        s["_settled_status"] = status
+        s["_settled_pnl_ils"] = _q2(pnl_ils_d)
+        s["_settled_status"]  = status
 
-        # 4. Update row in Supabase
-        patch_url = f"{update_url}?id=eq.{s['id']}"
+        patch_url  = f"{update_url}?id=eq.{s['id']}"
         patch_data = {
-            "actual_index_close": round(index_close, 2),
-            "actual_pnl_points":  round(pnl_points, 2),
-            "actual_pnl_ils":     pnl_ils,
+            "actual_index_close": _q2(index_close_d),
+            "actual_pnl_points":  _q2(pnl_points_d),
+            "actual_pnl_ils":     _q2(pnl_ils_d),
             "result_status":      status,
         }
 
         try:
-            headers = _headers()
-            headers["Prefer"] = "return=minimal"
-            r = httpx.patch(patch_url, headers=headers,
-                            content=json.dumps(patch_data),
-                            timeout=15)
+            r = httpx.patch(
+                patch_url,
+                headers=_sc.headers(Prefer="return=minimal"),
+                content=json.dumps(patch_data),
+                timeout=15,
+            )
             if r.status_code in (200, 204):
                 settled += 1
-                emoji = "✅" if pnl_points > 0 else "❌"
+                emoji = "✅" if pnl_points_d > ZERO else "❌"
                 logger.info(
-                    "   %s %.1f%% | Index=%.2f | P&L=%.2f pts (₪%.2f) | %s",
+                    "   %s %.1f%% | Index=%.4f | P&L=%.4f pts (₪%.2f) | %s",
                     emoji, _clean_numeric(s.get("interval_pct")),
-                    index_close, pnl_points, pnl_ils, status,
+                    float(index_close_d), float(pnl_points_d),
+                    float(pnl_ils_d), status,
                 )
             else:
                 logger.warning("Settlement update failed %d: %s",
@@ -801,48 +799,39 @@ def settle_expiry(expiry_date_iso: str):
                 settled, len(strategies))
     logger.info("=" * 50)
 
-    # Send Telegram settlement report
     if settled > 0:
         exp_weekday = date.fromisoformat(expiry_date_iso).weekday()
-        day_name = DAY_NAMES_HE.get(exp_weekday, "")
+        day_name    = DAY_NAMES_HE.get(exp_weekday, "")
 
-        # Re-read updated rows from DB (they now have actual_pnl_ils)
         report = []
         try:
-            read_url = (
-                f"{_base_url}/rest/v1/iron_condor_strategies"
+            read_url = _sc.rest_url(
+                f"iron_condor_strategies"
                 f"?expiry_date=eq.{expiry_date_iso}"
                 f"&result_status=not.is.null"
                 f"&select=interval_pct,short_put_strike,short_call_strike,"
                 f"actual_pnl_ils,result_status"
                 f"&order=interval_pct"
             )
-            rr = httpx.get(read_url, headers=_headers(), timeout=15)
+            rr = httpx.get(read_url, headers=_sc.headers(), timeout=15)
             if rr.status_code in (200, 206):
                 report = rr.json()
         except Exception:
             pass
 
-        # Fallback: build report from in-memory patch_data
-        # (strategies list was updated during the loop above)
         if not report:
             logger.warning("Settlement: re-read failed — using in-memory data")
             for s in strategies:
                 report.append({
-                    "interval_pct":     _clean_numeric(s.get("interval_pct")),
-                    "short_put_strike": _clean_numeric(s.get("short_put_strike")),
+                    "interval_pct":      _clean_numeric(s.get("interval_pct")),
+                    "short_put_strike":  _clean_numeric(s.get("short_put_strike")),
                     "short_call_strike": _clean_numeric(s.get("short_call_strike")),
-                    "actual_pnl_ils":   _clean_numeric(s.get("_settled_pnl_ils", 0)),
-                    "result_status":    s.get("_settled_status", ""),
+                    "actual_pnl_ils":    _clean_numeric(s.get("_settled_pnl_ils", 0)),
+                    "result_status":     s.get("_settled_status", ""),
                 })
 
-        # Get the base_index from when the strategy was entered
-        entry_base = _clean_numeric(
-            strategies[0].get("base_index_value", 0)
-        )
-        telegram_bot.alert_settlement(
-            day_name, index_close, entry_base, report,
-        )
+        entry_base = _clean_numeric(strategies[0].get("base_index_value", 0))
+        telegram_bot.alert_settlement(day_name, index_close, entry_base, report)
 
     return settled == len(strategies)
 
@@ -852,13 +841,13 @@ def settle_expiry(expiry_date_iso: str):
 # ------------------------------------------------------------------
 
 def _get_preferred_intervals() -> list:
-    """Read the user's preferred trading intervals from pipeline_state.
-    Returns a list of floats (e.g. [1.0, 1.5]) or [] if not set / on error.
-    Shared with the dashboard so the weekly summary matches the UI."""
+    """Read the user's preferred trading intervals from pipeline_state."""
+    _ensure_init()
     try:
-        url = (f"{_base_url}/rest/v1/pipeline_state"
-               f"?key=eq.preferred_intervals&select=value&limit=1")
-        r = httpx.get(url, headers=_headers(), timeout=10)
+        url = _sc.rest_url(
+            "pipeline_state?key=eq.preferred_intervals&select=value&limit=1"
+        )
+        r = httpx.get(url, headers=_sc.headers(), timeout=10)
         if r.status_code in (200, 206) and r.json():
             raw = r.json()[0].get("value", "") or ""
             return [round(float(x), 1) for x in raw.split(",") if x.strip()]
@@ -871,18 +860,15 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
     """Gather stats for the given ISO week number for the weekly summary."""
     _init()
 
-    # Calculate the date range for this ISO week
     if iso_year == 0:
         iso_year = datetime.now(TZ_ISRAEL).year
-    # ISO week 1 starts on the Monday of the week containing Jan 4
-    jan4 = date(iso_year, 1, 4)
-    week_start = jan4 - timedelta(days=jan4.weekday())  # Monday of week 1
+    jan4       = date(iso_year, 1, 4)
+    week_start = jan4 - timedelta(days=jan4.weekday())
     week_start += timedelta(weeks=iso_week - 1)
-    week_end = week_start + timedelta(days=6)  # Sunday
+    week_end   = week_start + timedelta(days=6)
 
-    # 1. Read this week's settled strategies (filtered by API)
-    url = (
-        f"{_base_url}/rest/v1/iron_condor_strategies"
+    url = _sc.rest_url(
+        f"iron_condor_strategies"
         f"?result_status=not.is.null"
         f"&trigger_date=gte.{week_start.isoformat()}"
         f"&trigger_date=lte.{week_end.isoformat()}"
@@ -890,7 +876,7 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
         f"&order=trigger_date"
     )
     try:
-        r = httpx.get(url, headers=_headers(), timeout=15)
+        r = httpx.get(url, headers=_sc.headers(), timeout=15)
         if r.status_code not in (200, 206):
             logger.warning("get_weekly_stats: HTTP %d", r.status_code)
             return {}
@@ -902,40 +888,34 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
     if not week_rows:
         return {}
 
-    # Restrict to the user's PREFERRED intervals (if configured) so the
-    # win-rate reflects what they actually trade, not all 8 variations.
     preferred = _get_preferred_intervals()
     if preferred:
         filtered = [r for r in week_rows
                     if round(_clean_numeric(r.get("interval_pct", 0)), 1) in preferred]
-        if filtered:  # only narrow when at least one preferred interval settled
+        if filtered:
             week_rows = filtered
-            logger.info("Weekly stats restricted to preferred intervals: %s",
-                        preferred)
+            logger.info("Weekly stats restricted to preferred intervals: %s", preferred)
 
-    # Compute week stats
-    trades = len(week_rows)
-    wins = sum(1 for r in week_rows
-               if _clean_numeric(r.get("actual_pnl_ils", 0)) > 0)
-    total_pnl = sum(_clean_numeric(r.get("actual_pnl_ils", 0))
-                    for r in week_rows)
+    trades    = len(week_rows)
+    wins      = sum(1 for r in week_rows
+                    if _clean_numeric(r.get("actual_pnl_ils", 0)) > 0)
+    total_pnl = sum(_clean_numeric(r.get("actual_pnl_ils", 0)) for r in week_rows)
 
-    # Best and worst interval
-    by_interval = {}
+    by_interval: dict = {}
     for r in week_rows:
         pct = _clean_numeric(r.get("interval_pct", 0))
         pnl = _clean_numeric(r.get("actual_pnl_ils", 0))
         by_interval[pct] = by_interval.get(pct, 0) + pnl
 
-    best_interval = max(by_interval, key=by_interval.get) if by_interval else 0
+    best_interval  = max(by_interval, key=by_interval.get) if by_interval else 0
     worst_interval = min(by_interval, key=by_interval.get) if by_interval else 0
 
     return {
-        "trades": trades,
-        "wins": wins,
-        "total_pnl": total_pnl,
-        "best_interval": best_interval,
-        "best_pnl": by_interval.get(best_interval, 0),
+        "trades":         trades,
+        "wins":           wins,
+        "total_pnl":      total_pnl,
+        "best_interval":  best_interval,
+        "best_pnl":       by_interval.get(best_interval, 0),
         "worst_interval": worst_interval,
-        "worst_pnl": by_interval.get(worst_interval, 0),
+        "worst_pnl":      by_interval.get(worst_interval, 0),
     }

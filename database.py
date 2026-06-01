@@ -5,21 +5,22 @@ Flat structure: each option record is its own row in the table.
 Clears all rows before each fresh write (keep only latest snapshot).
 """
 
-import os
+import csv
+import io
 import json
 import logging
+import os
 import time as _time
+from datetime import datetime as _dt, date as _date, timedelta as _td
 
 import httpx
+import supabase_client as _sc
+from config import TZ_ISRAEL, BATCH_SIZE
 
 logger = logging.getLogger("tase_pipeline")
 
-_base_url:      str = ""
-_api_key:       str = ""
-_table:         str = "tase_putcall"
-_history_table: str = "tase_putcall_history"
-
-from config import TZ_ISRAEL, BATCH_SIZE
+_table:         str = ""
+_history_table: str = ""
 
 # Columns that exist in the Supabase table (all lowercase)
 VALID_COLUMNS = {
@@ -39,35 +40,19 @@ VALID_COLUMNS = {
     "positionchange_put", "curr_hour_put", "underlingasset_put",
 }
 
-
-_cached_headers: dict = {}
+_UPSERT_PREFER = {"Prefer": "resolution=merge-duplicates"}
 
 
 def _init():
-    global _base_url, _api_key, _table, _history_table, _cached_headers
-    _base_url      = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    _api_key       = os.environ.get("SUPABASE_KEY", "")
+    global _table, _history_table
+    _sc.ensure_init()
     _table         = os.environ.get("SUPABASE_TABLE", "tase_putcall")
     _history_table = os.environ.get("SUPABASE_HISTORY_TABLE", "tase_putcall_history")
-    if not _base_url or not _api_key:
-        raise RuntimeError(
-            "SUPABASE_URL and SUPABASE_KEY environment variables must be set"
-        )
-    _cached_headers = {
-        "apikey":        _api_key,
-        "Authorization": f"Bearer {_api_key}",
-        "Content-Type":  "application/json",
-        "Prefer":        "resolution=merge-duplicates",
-    }
 
 
 def _ensure_init():
-    if not _base_url:
+    if not _table:
         _init()
-
-
-def _headers() -> dict:
-    return _cached_headers.copy()
 
 
 # ------------------------------------------------------------------
@@ -75,10 +60,10 @@ def test_connection() -> bool:
     """Call at startup to verify Supabase credentials."""
     try:
         _init()
-        url = f"{_base_url}/rest/v1/{_table}?select=id&limit=1"
-        r = httpx.get(url, headers=_headers(), timeout=10)
+        url = _sc.rest_url(f"{_table}?select=id&limit=1")
+        r = httpx.get(url, headers=_sc.headers(), timeout=10)
         if r.status_code in (200, 206):
-            logger.info("Supabase connection OK  (%s)", _base_url)
+            logger.info("Supabase connection OK  (%s)", _sc.base_url())
             return True
         logger.error("Supabase test query returned %d: %s",
                      r.status_code, r.text[:200])
@@ -91,13 +76,15 @@ def test_connection() -> bool:
 # ------------------------------------------------------------------
 def _clear_old_snapshots(keep_date: str, keep_time: str) -> bool:
     """Delete rows from previous snapshots, keeping only the current one.
-    Safe: only runs after successful write, so data is never lost."""
+    Safe: only runs after a successful write, so data is never lost."""
     _ensure_init()
-    # Delete rows that don't match the current fetch_date+fetch_time
-    url = (f"{_base_url}/rest/v1/{_table}"
-           f"?or=(fetch_date.neq.{keep_date},fetch_time.neq.{keep_time})")
     try:
-        r = httpx.delete(url, headers=_headers(), timeout=15)
+        r = httpx.delete(
+            _sc.rest_url(_table),
+            headers=_sc.headers(),
+            params={"or": f"(fetch_date.neq.{keep_date},fetch_time.neq.{keep_time})"},
+            timeout=15,
+        )
         if r.status_code in (200, 204):
             logger.info("Cleared old snapshots (keeping %s %s)",
                         keep_date, keep_time)
@@ -114,15 +101,14 @@ def upsert_items(fetch_date: str, fetch_time: str,
                  expiry_date: str, trade_date: str,
                  items: list, max_retries: int = 3) -> bool:
     """
-    Insert each option as its own row. Sends in batches.
-    Does NOT clear the table — call clear_table() once before the loop.
+    Insert each option as its own row.  Sends in batches.
+    Does NOT clear the table — call _clear_old_snapshots() after the full cycle.
     """
     _ensure_init()
-    # on_conflict ensures UPSERT — avoids 409 if two instances
-    # write simultaneously during a Render deploy
-    url = (f"{_base_url}/rest/v1/{_table}"
-           f"?on_conflict=fetch_date,fetch_time,expiry_date,"
-           f"derivativeid_call,derivativeid_put")
+    url = _sc.rest_url(
+        f"{_table}?on_conflict=fetch_date,fetch_time,expiry_date,"
+        f"derivativeid_call,derivativeid_put"
+    )
 
     rows = []
     for item in items:
@@ -132,24 +118,25 @@ def upsert_items(fetch_date: str, fetch_time: str,
             "expiry_date": expiry_date,
             "trade_date":  trade_date,
         }
-        # Copy all API fields, converting keys to lowercase
-        # Only include columns that exist in the table
         for key, val in item.items():
             col = key.lower()
             if col in VALID_COLUMNS:
                 row[col] = val
         rows.append(row)
 
-    # Send in batches
     total_ok = 0
     for i in range(0, len(rows), BATCH_SIZE):
-        batch = rows[i : i + BATCH_SIZE]
+        batch   = rows[i : i + BATCH_SIZE]
         payload = json.dumps(batch, ensure_ascii=False)
 
         for attempt in range(1, max_retries + 1):
             try:
-                r = httpx.post(url, headers=_headers(),
-                               content=payload, timeout=30)
+                r = httpx.post(
+                    url,
+                    headers=_sc.headers(**_UPSERT_PREFER),
+                    content=payload,
+                    timeout=30,
+                )
                 if r.status_code in (200, 201, 204):
                     total_ok += len(batch)
                     break
@@ -167,17 +154,15 @@ def upsert_items(fetch_date: str, fetch_time: str,
 
     if total_ok == len(rows):
         logger.info("Supabase upsert OK: %d rows (%s / %s)",
-                     total_ok, fetch_date, expiry_date)
+                    total_ok, fetch_date, expiry_date)
         return True
-    else:
-        logger.error("Supabase upsert partial: %d/%d rows",
-                      total_ok, len(rows))
-        return False
+    logger.error("Supabase upsert partial: %d/%d rows", total_ok, len(rows))
+    return False
 
 
 def upsert_no_trading(fetch_date: str, fetch_time: str,
-                      expiry_date: str) -> bool:
-    """Write a single 'no trading' placeholder row."""
+                      expiry_date: str, max_retries: int = 3) -> bool:
+    """Write a single 'no trading' placeholder row, with retry."""
     _ensure_init()
     row = {
         "fetch_date":          fetch_date,
@@ -186,20 +171,23 @@ def upsert_no_trading(fetch_date: str, fetch_time: str,
         "derivativename_call": "ללא מסחר",
         "derivativename_put":  "ללא מסחר",
     }
-    url = f"{_base_url}/rest/v1/{_table}"
+    url     = _sc.rest_url(_table)
+    payload = json.dumps(row, ensure_ascii=False)
 
-    try:
-        r = httpx.post(url, headers=_headers(),
-                       content=json.dumps(row, ensure_ascii=False),
-                       timeout=30)
-        if r.status_code in (200, 201, 204):
-            logger.info("Supabase no-trading OK: %s %s",
-                         fetch_date, expiry_date)
-            return True
-        logger.warning("Supabase no-trading %d: %s",
-                        r.status_code, r.text[:200])
-    except Exception as e:
-        logger.warning("Supabase no-trading error: %s", e)
+    for attempt in range(1, max_retries + 1):
+        try:
+            r = httpx.post(url, headers=_sc.headers(), content=payload, timeout=30)
+            if r.status_code in (200, 201, 204):
+                logger.info("Supabase no-trading OK: %s %s",
+                            fetch_date, expiry_date)
+                return True
+            logger.warning("Supabase no-trading %d (attempt %d/%d): %s",
+                           r.status_code, attempt, max_retries, r.text[:200])
+        except Exception as e:
+            logger.warning("Supabase no-trading error (attempt %d/%d): %s",
+                           attempt, max_retries, e)
+        if attempt < max_retries:
+            _time.sleep(2 ** attempt)
     return False
 
 
@@ -211,15 +199,15 @@ def copy_to_history(max_retries: int = 3) -> bool:
     """
     _ensure_init()
 
-    # 1. Read all rows from live table (paginated)
     rows = []
     batch_sz = 1000
     offset = 0
     try:
         while True:
-            read_url = (f"{_base_url}/rest/v1/{_table}"
-                        f"?select=*&order=id&limit={batch_sz}&offset={offset}")
-            r = httpx.get(read_url, headers=_headers(), timeout=30)
+            read_url = _sc.rest_url(
+                f"{_table}?select=*&order=id&limit={batch_sz}&offset={offset}"
+            )
+            r = httpx.get(read_url, headers=_sc.headers(), timeout=30)
             if r.status_code not in (200, 206):
                 logger.error("History read failed: %d", r.status_code)
                 return False
@@ -238,27 +226,28 @@ def copy_to_history(max_retries: int = 3) -> bool:
         logger.info("No rows to copy to history")
         return True
 
-    # 2. Remove 'id' and 'fetched_at' so history table generates its own
     for row in rows:
         row.pop("id", None)
         row.pop("fetched_at", None)
 
-    # 3. Insert into history table in batches (UPSERT to prevent duplicates)
-    write_url = (f"{_base_url}/rest/v1/{_history_table}"
-                 f"?on_conflict=fetch_date,fetch_time,expiry_date,"
-                 f"derivativeid_call,derivativeid_put")
+    write_url = _sc.rest_url(
+        f"{_history_table}?on_conflict=fetch_date,fetch_time,expiry_date,"
+        f"derivativeid_call,derivativeid_put"
+    )
     total_ok = 0
 
     for i in range(0, len(rows), BATCH_SIZE):
-        batch = rows[i : i + BATCH_SIZE]
+        batch   = rows[i : i + BATCH_SIZE]
         payload = json.dumps(batch, ensure_ascii=False)
 
         for attempt in range(1, max_retries + 1):
             try:
-                h = _headers()
-                h["Prefer"] = "resolution=merge-duplicates"
-                r = httpx.post(write_url, headers=h,
-                               content=payload, timeout=30)
+                r = httpx.post(
+                    write_url,
+                    headers=_sc.headers(**_UPSERT_PREFER),
+                    content=payload,
+                    timeout=30,
+                )
                 if r.status_code in (200, 201, 204):
                     total_ok += len(batch)
                     break
@@ -277,9 +266,8 @@ def copy_to_history(max_retries: int = 3) -> bool:
     if total_ok == len(rows):
         logger.info("History save OK: %d rows copied", total_ok)
         return True
-    else:
-        logger.error("History save partial: %d/%d rows", total_ok, len(rows))
-        return False
+    logger.error("History save partial: %d/%d rows", total_ok, len(rows))
+    return False
 
 
 # ------------------------------------------------------------------
@@ -287,30 +275,25 @@ def backup_to_storage() -> bool:
     """
     Weekly backup: export history + strategies tables as CSV
     and upload to Supabase Storage bucket 'backups'.
-    The bucket must be created manually in Supabase Dashboard.
+    The bucket must be created manually in the Supabase Dashboard.
     """
     _ensure_init()
-    import csv
-    import io
-    from datetime import datetime as _dt
-    today = _dt.now(TZ_ISRAEL).strftime("%Y-%m-%d")
+    today  = _dt.now(TZ_ISRAEL).strftime("%Y-%m-%d")
     tables = [_history_table, "iron_condor_strategies"]
     success = 0
 
     for table in tables:
-        # 1. Read all rows with pagination
         rows = []
         batch_sz = 1000
         offset = 0
         try:
             while True:
-                url = (f"{_base_url}/rest/v1/{table}"
-                       f"?select=*&order=id"
-                       f"&limit={batch_sz}&offset={offset}")
-                r = httpx.get(url, headers=_headers(), timeout=30)
+                url = _sc.rest_url(
+                    f"{table}?select=*&order=id&limit={batch_sz}&offset={offset}"
+                )
+                r = httpx.get(url, headers=_sc.headers(), timeout=30)
                 if r.status_code not in (200, 206):
-                    logger.warning("Backup read %s: HTTP %d",
-                                   table, r.status_code)
+                    logger.warning("Backup read %s: HTTP %d", table, r.status_code)
                     break
                 chunk = r.json()
                 if not chunk:
@@ -327,32 +310,23 @@ def backup_to_storage() -> bool:
             logger.info("Backup %s: no rows, skipping", table)
             continue
 
-        # 2. Convert to CSV
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=rows[0].keys())
         writer.writeheader()
         writer.writerows(rows)
         csv_bytes = buf.getvalue().encode("utf-8")
 
-        # 3. Upload to Supabase Storage
         filename = f"{table}_{today}.csv"
-        storage_url = (
-            f"{_base_url}/storage/v1/object/backups/{filename}"
-        )
-        upload_headers = {
-            "apikey": _api_key,
-            "Authorization": f"Bearer {_api_key}",
-            "Content-Type": "text/csv",
-            "x-upsert": "true",
-        }
-
         try:
-            r = httpx.post(storage_url, headers=upload_headers,
-                           content=csv_bytes, timeout=30)
+            r = httpx.post(
+                _sc.storage_url(f"backups/{filename}"),
+                headers=_sc.headers(**{"Content-Type": "text/csv", "x-upsert": "true"}),
+                content=csv_bytes,
+                timeout=30,
+            )
             if r.status_code in (200, 201):
                 logger.info("Backup %s OK: %s (%d rows, %.1f KB)",
-                            table, filename, len(rows),
-                            len(csv_bytes) / 1024)
+                            table, filename, len(rows), len(csv_bytes) / 1024)
                 success += 1
             else:
                 logger.warning("Backup upload %s: HTTP %d — %s",
@@ -365,38 +339,31 @@ def backup_to_storage() -> bool:
 
 # ------------------------------------------------------------------
 # Pipeline state — restart-safe markers (daily/weekly summaries,
-# strategy triggers, settlement done). Keys are small strings like
-# "daily_summary_sent:2026-05-29".
+# strategy triggers, settlement done).
 # ------------------------------------------------------------------
 
 def has_history_earlier_this_week(today_iso: str) -> bool:
     """Return True if tase_putcall_history has any rows from a date
-    earlier than `today_iso` within the same ISO week.
-
-    Used to detect whether today is the FIRST trading day of the week
-    (robust to Monday holidays — checks actual collected data rather
-    than the calendar).  Strategy trigger uses this to ensure it only
-    fires on day-1 of the week, not later days after a restart that
-    cleared the in-memory `strategy_triggered_week` flag.
-    """
+    earlier than today_iso within the same ISO week."""
     _ensure_init()
-    from datetime import date as _date, timedelta as _td
     try:
-        d = _date.fromisoformat(today_iso)
+        d      = _date.fromisoformat(today_iso)
         monday = d - _td(days=d.weekday())
     except ValueError:
         return False
 
-    if monday >= d:  # today IS monday — no earlier day in week
+    if monday >= d:
         return False
 
     yesterday_in_week = (d - _td(days=1)).isoformat()
-    url = (f"{_base_url}/rest/v1/{_history_table}"
-           f"?fetch_date=gte.{monday.isoformat()}"
-           f"&fetch_date=lte.{yesterday_in_week}"
-           f"&select=id&limit=1")
+    url = _sc.rest_url(
+        f"{_history_table}"
+        f"?fetch_date=gte.{monday.isoformat()}"
+        f"&fetch_date=lte.{yesterday_in_week}"
+        f"&select=id&limit=1"
+    )
     try:
-        r = httpx.get(url, headers=_headers(), timeout=10)
+        r = httpx.get(url, headers=_sc.headers(), timeout=10)
         if r.status_code in (200, 206):
             return len(r.json()) > 0
     except Exception as e:
@@ -408,9 +375,8 @@ def state_is_set(key: str) -> bool:
     """Return True if a marker exists for this key. Safe on errors → False."""
     _ensure_init()
     try:
-        url = (f"{_base_url}/rest/v1/pipeline_state"
-               f"?key=eq.{key}&select=key&limit=1")
-        r = httpx.get(url, headers=_headers(), timeout=10)
+        url = _sc.rest_url(f"pipeline_state?key=eq.{key}&select=key&limit=1")
+        r = httpx.get(url, headers=_sc.headers(), timeout=10)
         if r.status_code in (200, 206):
             return len(r.json()) > 0
     except Exception as e:
@@ -422,12 +388,14 @@ def state_set(key: str, value: str = "1") -> bool:
     """UPSERT a state marker. Safe on errors → False (caller must tolerate)."""
     _ensure_init()
     try:
-        url = (f"{_base_url}/rest/v1/pipeline_state"
-               f"?on_conflict=key")
-        h = _headers()
-        h["Prefer"] = "resolution=merge-duplicates"
+        url     = _sc.rest_url("pipeline_state?on_conflict=key")
         payload = json.dumps([{"key": key, "value": value}])
-        r = httpx.post(url, headers=h, content=payload, timeout=10)
+        r = httpx.post(
+            url,
+            headers=_sc.headers(**_UPSERT_PREFER),
+            content=payload,
+            timeout=10,
+        )
         if r.status_code in (200, 201, 204):
             return True
         logger.warning("state_set(%s) returned %d: %s",

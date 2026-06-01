@@ -72,7 +72,9 @@ def send_message(text: str) -> bool:
                 return False
             last_err = f"HTTP {r.status_code}: {r.text[:200]}"
         except Exception as e:
-            last_err = f"exception: {e}"
+            # Strip token from exception message before logging — some network
+            # errors include the request URL which contains the bot token.
+            last_err = f"exception: {str(e).replace(_token, '<token>')}"
 
         if attempt < _MAX_RETRIES:
             wait = 2 ** (attempt - 1)  # 1s, 2s, 4s

@@ -61,3 +61,5 @@ WEEKLY_SUMMARY_TIME   = dt_time(17, 0)
 BROWSER_RESTART_SECONDS = 6 * 3600       # restart Playwright every 6h
 FETCH_INTERVAL_MINUTES  = 15
 BATCH_SIZE              = 50             # Supabase rows per POST
+PAGE_TIMEOUT_MS         = 45_000         # Playwright navigation timeout
+RENDER_WAIT_SECONDS     = 6              # post-navigation settle delay
