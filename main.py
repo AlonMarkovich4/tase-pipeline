@@ -207,132 +207,41 @@ def recover_session(pw, browser, context, page):
 # REAL opening price for settlement and the live last-traded value,
 # directly from the exchange — no Yahoo proxy needed.
 # ------------------------------------------------------------------
-TASE_INDEX_URL = "https://api.tase.co.il/api/index/major-data?indexId=142"
+def _get_tase_last_rate(page=None) -> float:
+    """Get the live TA-35 index value from the latest Supabase snapshot.
 
-# Module-level cache so settlement + strategy + heartbeat don't
-# re-fetch within the same cycle.
-_tase_index_cache: dict = {}
-_tase_index_cache_ts: float = 0.0
-_TASE_INDEX_TTL = 120  # seconds
+    TASE embeds the live index inside the Put/Call data (UnderlingAsset_call),
+    which run_cycle injects into every row.  Reading it back from Supabase
+    gives us the authoritative TASE value without a separate API call
+    (the standalone TASE index endpoint is blocked by Imperva WAF).
 
-
-def fetch_tase_index(page) -> dict:
-    """Fetch TA-35 index data directly from TASE via the Playwright page.
-
-    Returns a dict with keys (or empty dict on failure):
-      lastRate      — last traded index value
-      baseRate      — base/reference value
-      openRate      — opening price (= settlement price)
-      highRate      — intraday high
-      lowRate       — intraday low
-      changePercent — % change
-    """
-    import time as _t
-    global _tase_index_cache_ts
-
-    now_ts = _t.monotonic()
-    if _tase_index_cache and (now_ts - _tase_index_cache_ts) < _TASE_INDEX_TTL:
-        return _tase_index_cache
-
-    js = """
-    async (url) => {
-        try {
-            const r = await fetch(url, {
-                headers: {
-                    "Accept": "application/json, text/plain, */*",
-                    "Content-Type": "application/json;charset=UTF-8",
-                    "Accept-Language": "he-IL"
-                }
-            });
-            if (r.status !== 200) return { error: "status_" + r.status };
-            return { data: await r.json() };
-        } catch(e) { return { error: e.message }; }
-    }
+    `page` is accepted for signature compatibility but unused.
+    Returns 0.0 on failure.
     """
     try:
-        result = page.evaluate(js, TASE_INDEX_URL)
-        if result.get("error"):
-            logger.warning("TASE index API error: %s", result["error"])
-            return _tase_index_cache or {}
-
-        data = result.get("data", {})
-        if not data:
-            return _tase_index_cache or {}
-
-        # TASE returns nested structure — look for common field names
-        # The main data page shows: lastRate, baseRate, openRate, etc.
-        out = {}
-        # Try direct fields first
-        for key in ("LastRate", "lastRate", "BaseRate", "baseRate",
-                    "OpenRate", "openRate", "HighRate", "highRate",
-                    "LowRate", "lowRate", "ChangePercent", "changePercent",
-                    "IndexLastValue", "IndexBaseValue"):
-            val = data.get(key)
-            if val is not None:
-                out[key] = val
-
-        # Some TASE API responses nest data under IndexData or similar
-        for container_key in ("IndexData", "Data", "MajorData"):
-            nested = data.get(container_key)
-            if isinstance(nested, dict):
-                for key in ("LastRate", "lastRate", "BaseRate", "baseRate",
-                            "OpenRate", "openRate", "HighRate", "highRate",
-                            "LowRate", "lowRate", "ChangePercent", "changePercent"):
-                    val = nested.get(key)
-                    if val is not None:
-                        out[key] = val
-
-        if out:
-            _tase_index_cache.clear()
-            _tase_index_cache.update(out)
-            _tase_index_cache_ts = now_ts
-            # Log what we found
-            last = out.get("LastRate") or out.get("lastRate") or out.get("IndexLastValue")
-            opn = out.get("OpenRate") or out.get("openRate")
-            logger.info("TASE index direct: last=%.2f open=%s keys=%s",
-                        float(last) if last else 0,
-                        f"{float(opn):.2f}" if opn else "N/A",
-                        list(out.keys()))
-        else:
-            # Log the raw keys for debugging (first time / new API shape)
-            logger.info("TASE index API returned unknown structure: %s",
-                        list(data.keys())[:20])
-
-        return _tase_index_cache or {}
-
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        if not base or not key:
+            return 0.0
+        import httpx as _httpx
+        url = (f"{base}/rest/v1/tase_putcall"
+               f"?select=underlingasset_call&order=id.desc&limit=20")
+        r = _httpx.get(url, headers={"apikey": key,
+                                     "Authorization": f"Bearer {key}"},
+                       timeout=10)
+        if r.status_code in (200, 206):
+            for row in r.json():
+                raw = row.get("underlingasset_call")
+                if raw in (None, "", 0):
+                    continue
+                try:
+                    v = float(str(raw).replace(",", ""))
+                    if 1000 <= v <= 10000:
+                        return v
+                except (ValueError, TypeError):
+                    continue
     except Exception as e:
-        logger.warning("TASE index fetch error: %s", e)
-        return _tase_index_cache or {}
-
-
-def _get_tase_last_rate(page) -> float:
-    """Get the live TA-35 index value from TASE. Returns 0.0 on failure."""
-    data = fetch_tase_index(page)
-    for key in ("LastRate", "lastRate", "IndexLastValue"):
-        val = data.get(key)
-        if val:
-            try:
-                v = float(val)
-                if 1000 <= v <= 10000:
-                    return v
-            except (ValueError, TypeError):
-                continue
-    return 0.0
-
-
-def _get_tase_open_rate(page) -> float:
-    """Get the TA-35 opening price from TASE (= settlement price).
-    Returns 0.0 on failure."""
-    data = fetch_tase_index(page)
-    for key in ("OpenRate", "openRate"):
-        val = data.get(key)
-        if val:
-            try:
-                v = float(val)
-                if 1000 <= v <= 10000:
-                    return v
-            except (ValueError, TypeError):
-                continue
+        logger.warning("_get_tase_last_rate error: %s", e)
     return 0.0
 
 
@@ -461,27 +370,28 @@ def _fetch_all_pages(page, expr_date_iso: str):
         trade_date = trade_date or data.get("TradeDate")
         asset_name = asset_name or data.get("AssetName")
 
-        # Capture underlying asset value from top-level response
-        if underlying_value is None:
-            # Log all top-level keys on first page for debugging
-            if page_num == 1:
-                top_keys = [k for k in data.keys() if k != "Items"]
-                logger.info("   API top-level keys: %s", top_keys)
-                # Log values of non-Items keys (for finding base index)
-                for k in top_keys:
-                    v = data[k]
-                    if isinstance(v, (int, float)) and v > 0:
-                        logger.info("   API %s = %s", k, v)
-
-            # Try common field names for underlying asset value
-            for field in ("UnderlyingAssetValue", "UnderlyingAsset",
-                          "UnderlingAsset", "BaseValue", "IndexValue",
-                          "AssetValue", "BaseRate"):
-                val = data.get(field)
-                if val and isinstance(val, (int, float)) and val > 0:
-                    underlying_value = float(val)
-                    logger.info("   Underlying asset from '%s': %.2f",
-                                field, underlying_value)
+        # Capture underlying asset value.  TASE embeds the live TA-35
+        # index inside EACH item as "UnderlingAsset_call"/"_put" — this
+        # is the authoritative exchange value (e.g. "4423.44"), present
+        # on every row.  We read it from the first item that has it.
+        if underlying_value is None and items:
+            for it in items:
+                for field in ("UnderlingAsset_call", "UnderlingAsset_put",
+                              "UnderlingAsset_Call", "UnderlingAsset_Put"):
+                    raw = it.get(field)
+                    if raw in (None, "", 0):
+                        continue
+                    try:
+                        v = float(str(raw).replace(",", ""))
+                        if 1000 <= v <= 10000:
+                            underlying_value = v
+                            logger.info(
+                                "   TA-35 from TASE item field '%s': %.2f",
+                                field, v)
+                            break
+                    except (ValueError, TypeError):
+                        continue
+                if underlying_value is not None:
                     break
 
         if not items:
@@ -525,17 +435,13 @@ def run_cycle(page, cycle_time: datetime):
     logger.info("Expiry dates: %s",
                 [d.isoformat() for d in expiry_dates])
 
-    # ── Fetch live TA-35 index once per cycle.
-    # Priority: TASE direct API (via Playwright session) → Yahoo fallback.
-    # We inject this into every row so the underlingasset_* columns are
-    # populated for strategy_engine and dashboard.
-    cycle_underlying = _get_tase_last_rate(page)
-    if cycle_underlying <= 0:
-        try:
-            import strategy_engine as _se
-            cycle_underlying = _se._fetch_index_from_yahoo()
-        except Exception as ye:
-            logger.warning("Live index fetch failed (TASE + Yahoo): %s", ye)
+    # ── Live TA-35 index.
+    # TASE is the AUTHORITATIVE source — it IS the exchange that prices
+    # the index.  TASE embeds the live value inside the Put/Call items
+    # (UnderlingAsset_call), so we capture it from the per-expiry fetch
+    # below.  Yahoo is an emergency fallback ONLY (less accurate).
+    cycle_underlying = 0.0
+    cycle_index_source = "tase"
 
     success_count = 0
     total_rows = 0
@@ -551,9 +457,14 @@ def run_cycle(page, cycle_time: datetime):
             page, exp_iso,
         )
 
+        # First valid TASE underlying becomes this cycle's index value
+        if cycle_underlying <= 0 and underlying and underlying > 0:
+            cycle_underlying = underlying
+            logger.info("TA-35 from TASE (authoritative): %.2f", cycle_underlying)
+
         # Inject underlying asset value into each item so it's
         # stored in Supabase and available for strategy_engine /
-        # dashboard.  Priority: TASE-provided value, else Yahoo live.
+        # dashboard.  Priority: this expiry's TASE value → cycle value.
         effective_underlying = underlying or cycle_underlying
         if effective_underlying and items:
             for item in items:
@@ -589,6 +500,20 @@ def run_cycle(page, cycle_time: datetime):
         if idx < len(expiry_dates) - 1:
             time.sleep(random.uniform(3, 5))
 
+    # Emergency fallback: if TASE never gave us an underlying value this
+    # cycle (very rare), fall back to Yahoo so downstream still has an index.
+    if cycle_underlying <= 0:
+        cycle_index_source = "yahoo_fallback"
+        try:
+            import strategy_engine as _se
+            cycle_underlying = _se._fetch_index_from_yahoo()
+            if cycle_underlying > 0:
+                logger.warning(
+                    "⚠ TA-35 from YAHOO FALLBACK (%.2f) — TASE underlying "
+                    "missing this cycle. Less accurate.", cycle_underlying)
+        except Exception as ye:
+            logger.warning("Live index Yahoo fallback failed: %s", ye)
+
     # Only clean up old snapshots when ALL expiries succeeded.  A partial
     # cycle would otherwise erase older complete snapshots and leave the
     # strategy engine with an incomplete view.
@@ -606,6 +531,8 @@ def run_cycle(page, cycle_time: datetime):
         "expiries": len(expiry_dates),
         "expiry_dates": expiry_dates,  # actual TASE trading days this week
         "full_success": success_count == len(expiry_dates),
+        "index_value": cycle_underlying,
+        "index_source": cycle_index_source,  # "tase" | "yahoo_fallback"
     }
 
 
@@ -656,6 +583,44 @@ def is_last_trading_day_of_week(now: datetime, expiry_dates: list) -> bool:
 
 
 # ------------------------------------------------------------------
+# Data-quality monitoring
+# ------------------------------------------------------------------
+
+def assess_cycle_quality(cycle_result: dict, recent_rows: list) -> list:
+    """Inspect a cycle result and recent history; return a list of
+    human-readable Hebrew issue strings (empty = healthy).
+
+    Detects:
+      • Yahoo fallback in use (TASE index unavailable)
+      • Partial expiry collection (not all expiries succeeded)
+      • Row-count anomaly (this cycle collected far fewer rows than
+        the recent average — possible truncated/blocked response)
+    """
+    issues = []
+
+    # 1. Index source — Yahoo fallback means TASE index API failed
+    if cycle_result.get("index_source") == "yahoo_fallback":
+        issues.append("מדד TA-35 נשלף מ-Yahoo (גיבוי) — TASE לא זמין")
+
+    # 2. Partial expiry collection
+    if not cycle_result.get("full_success", True):
+        issues.append(
+            f"איסוף חלקי — לא כל הפקיעות נקלטו "
+            f"({cycle_result.get('expiries', 0)} פקיעות)")
+
+    # 3. Row-count anomaly vs recent average
+    rows_now = cycle_result.get("rows", 0)
+    if recent_rows and rows_now > 0:
+        avg = sum(recent_rows) / len(recent_rows)
+        if avg > 0 and rows_now < avg * 0.6:
+            issues.append(
+                f"ירידה חדה בכמות נתונים — {rows_now} שורות "
+                f"(ממוצע אחרון {avg:.0f})")
+
+    return issues
+
+
+# ------------------------------------------------------------------
 # Main loop
 # ------------------------------------------------------------------
 
@@ -692,6 +657,9 @@ def main():
     current_week = datetime.now(TZ_ISRAEL).isocalendar()[1]  # init before loop
                                      # so the off-hours weekly-summary block can
                                      # reference it even on a fresh off-hours start
+    recent_row_counts: list = []     # rolling window of last N cycles' row counts
+    quality_alert_date = None        # date we last sent a data-quality alert
+                                     # (rate-limit: at most one per day)
 
     with sync_playwright() as pw:
         browser, context, page = launch_browser(pw)
@@ -814,6 +782,26 @@ def main():
                     if cycle_expiries:
                         last_known_expiries = cycle_expiries
 
+                    # ── Data-quality monitoring ──
+                    # Assess this cycle BEFORE adding it to the rolling
+                    # window (so the anomaly check compares against the
+                    # prior baseline, not itself).
+                    quality_issues = assess_cycle_quality(
+                        cycle_result, recent_row_counts)
+                    if quality_issues and quality_alert_date != today_iso:
+                        logger.warning("Data-quality issues: %s", quality_issues)
+                        try:
+                            telegram_bot.alert_data_quality(quality_issues)
+                            quality_alert_date = today_iso  # at most 1/day
+                        except Exception as qe:
+                            logger.error("Quality alert failed: %s", qe)
+                    # Update rolling window (keep last 10 cycles)
+                    rows_now = cycle_result.get("rows", 0)
+                    if rows_now > 0:
+                        recent_row_counts.append(rows_now)
+                        if len(recent_row_counts) > 10:
+                            recent_row_counts.pop(0)
+
                 # Weekly heartbeat: first successful cycle of the week
                 # after 10:00, on the first trading day.  A quick
                 # "system alive" Telegram so the user knows data is
@@ -899,11 +887,10 @@ def main():
                             has_strategies = strategy_engine.has_unsettled_strategies(today_iso)
                             if has_strategies:
                                 logger.info("*** Settling expiry %s ***", today_iso)
-                                # Pass the TASE opening price directly from the exchange
-                                # (most accurate settlement source)
-                                tase_open = _get_tase_open_rate(page)
-                                result = strategy_engine.settle_expiry(
-                                    today_iso, tase_open_price=tase_open)
+                                # Settlement uses the opening price. The standalone
+                                # TASE index API (with openRate) is WAF-blocked, so
+                                # settle_expiry falls back to Yahoo's regularMarketOpen.
+                                result = strategy_engine.settle_expiry(today_iso)
                                 if result:
                                     db.state_set(settle_key)
                                     settled_today = today_iso

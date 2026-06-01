@@ -104,6 +104,25 @@ def alert_crash(error_msg: str = ""):
 
 
 # ------------------------------------------------------------------
+# 1c. DATA QUALITY DEGRADATION ALERT
+# ------------------------------------------------------------------
+
+def alert_data_quality(issues: list):
+    """Sent when data-quality degradation is detected (not a hard crash).
+    `issues` is a list of human-readable Hebrew strings."""
+    if not issues:
+        return
+    body = "\n".join(f"• {s}" for s in issues[:6])
+    text = (
+        "⚠️ *Pipeline — ירידה באיכות נתונים*\n"
+        "━━━━━━━━━━━━━━━\n"
+        f"{body}\n\n"
+        "המערכת ממשיכה לרוץ — לבדיקה."
+    )
+    send_message(text)
+
+
+# ------------------------------------------------------------------
 # 1b. WEEKLY HEARTBEAT (first trading day, ~10:00)
 # ------------------------------------------------------------------
 
