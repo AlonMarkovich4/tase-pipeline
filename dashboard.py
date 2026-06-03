@@ -819,7 +819,7 @@ def load_option_chain(expiry_date: str) -> pd.DataFrame:
             f"{SUPABASE_URL}/rest/v1/tase_putcall"
             f"?select=expirationprice_call,lastrate_call,lastrate_put,"
             f"delta_call,delta_put,openpositions_call,openpositions_put,"
-            f"dealsno_call,dealsno_put"
+            f"dealsno_call,dealsno_put,baserate_call,baserate_put"
             f"&expiry_date=eq.{expiry_date}"
             f"&fetch_date=eq.{fd}&fetch_time=eq.{ft}"
             f"&order=expirationprice_call"
@@ -850,6 +850,10 @@ def load_option_chain(expiry_date: str) -> pd.DataFrame:
                  "openpositions_put", "dealsno_call", "dealsno_put", "strike"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    for col in ["baserate_call", "baserate_put"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            df[f"{col}_pts"] = df[col] / MULTIPLIER
     df = df[df["strike"] > 0]  # Filter out rows with missing/zero strikes
     return df.sort_values("strike").reset_index(drop=True)
 
@@ -1871,6 +1875,9 @@ elif nav_page == "🏠 Home":
             pref_tag = ' · <span style="color:#00E676;">מועדף ✓</span>' if is_pref else ""
             medal = medals[i] if i < len(medals) else "•"
             top_cls = " top" if i == 0 else ""
+            _win_bar = min(100.0, item["win"] * 100)
+            _rew_bar = min(100.0, max(0.0,
+                           (item["score"] - item["win"] * 60) / 40 * 100))
             st.markdown(
                 f'<div class="rec-card{top_cls}">'
                 f'<div class="rec-header">'
@@ -1878,12 +1885,26 @@ elif nav_page == "🏠 Home":
                 f'<span style="color:{C_TEXT};font-weight:800;font-size:16px;">{pct:.1f}%</span>'
                 f'<span style="color:{C_DIM};font-size:12px;margin-right:8px;"> {sp:,.0f}—{sc:,.0f}</span>{pref_tag}</div>'
                 f'<div class="rec-stats">'
-                f'<span>ציון <strong style="color:{C_BLUE};font-size:15px;">{item["score"]}</strong></span>'
-                f'<span>סיכוי <strong style="color:{C_TEXT};">{item["win"]*100:.0f}%</strong></span>'
+                f'<span>ציון <strong style="color:{C_BLUE};font-size:15px;">{item["score"]}</strong>/100</span>'
                 f'<span>פרמיה <strong style="color:{C_TEXT};">{prem:,.1f}</strong></span>'
                 f'<span style="color:{C_GREEN};">+{mprofit:,.0f}₪</span>'
                 f'<span style="color:{C_RED};">-{mrisk:,.0f}₪</span>'
-                f'</div></div></div>', unsafe_allow_html=True)
+                f'</div></div>'
+                f'<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06);direction:ltr;">'
+                f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;">'
+                f'<span style="color:{C_DIM};font-size:10px;min-width:90px;">סיכוי הצלחה (60%)</span>'
+                f'<div style="flex:1;height:5px;background:rgba(255,255,255,0.07);border-radius:3px;">'
+                f'<div style="width:{_win_bar:.0f}%;height:100%;background:{C_GREEN};border-radius:3px;"></div></div>'
+                f'<span style="color:{C_GREEN};font-size:10px;min-width:30px;text-align:right;">{_win_bar:.0f}%</span>'
+                f'</div>'
+                f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;">'
+                f'<span style="color:{C_DIM};font-size:10px;min-width:90px;">תשואה יחסית (40%)</span>'
+                f'<div style="flex:1;height:5px;background:rgba(255,255,255,0.07);border-radius:3px;">'
+                f'<div style="width:{_rew_bar:.0f}%;height:100%;background:{C_BLUE};border-radius:3px;"></div></div>'
+                f'<span style="color:{C_BLUE};font-size:10px;min-width:30px;text-align:right;">{_rew_bar:.0f}%</span>'
+                f'</div>'
+                f'</div>'
+                f'</div>', unsafe_allow_html=True)
             dname = f"IC {pct:.1f}% (auto)"
             in_demo = (str(rec_meta["expiry"]), dname) in _open_demo_keys
             hc1, hc2 = st.columns([1, 3])
@@ -2405,6 +2426,41 @@ elif nav_page == "🕹️ Demo Trading":
             chain_html += '</tbody></table></div>'
             st.markdown(chain_html, unsafe_allow_html=True)
 
+            # ── IV Proxy — ATM theoretical vs. market price ───────────
+            if atm_strike > 0 and "baserate_call_pts" in chain_df.columns:
+                _atm_row = chain_df[chain_df["strike"] == atm_strike]
+                if not _atm_row.empty:
+                    _atm = _atm_row.iloc[0]
+                    _bc_pts = float(_atm.get("baserate_call_pts", 0) or 0)
+                    _bp_pts = float(_atm.get("baserate_put_pts", 0) or 0)
+                    _lc_pts = float(_atm.get("lastrate_call_pts", 0) or 0)
+                    _lp_pts = float(_atm.get("lastrate_put_pts", 0) or 0)
+                    if _bc_pts > 0 or _bp_pts > 0:
+                        _iv_c = _lc_pts - _bc_pts
+                        _iv_p = _lp_pts - _bp_pts
+                        _ivc_col = "green" if _iv_c > 0 else ("red" if _iv_c < 0 else "white")
+                        _ivp_col = "green" if _iv_p > 0 else ("red" if _iv_p < 0 else "white")
+                        st.markdown(
+                            f'<div style="color:{C_DIM};font-size:11px;margin:8px 0 2px;'
+                            f'direction:ltr;text-align:left;">'
+                            f'IV Proxy @ ATM {atm_strike:,.0f} '
+                            f'<span style="color:{C_DIM};font-size:10px;">'
+                            f'(שוק − תיאורטי)</span></div>',
+                            unsafe_allow_html=True,
+                        )
+                        render_metric_row(
+                            _card(
+                                f"Call — שוק {_lc_pts:.2f} / תיאורטי {_bc_pts:.2f}",
+                                f"{_iv_c:+.2f} pts" if _bc_pts > 0 else "N/A",
+                                _ivc_col,
+                            ),
+                            _card(
+                                f"Put — שוק {_lp_pts:.2f} / תיאורטי {_bp_pts:.2f}",
+                                f"{_iv_p:+.2f} pts" if _bp_pts > 0 else "N/A",
+                                _ivp_col,
+                            ),
+                        )
+
             # ── Add to Sandbox widget ──
             st.markdown(
                 f'<div style="color:{C_DIM};font-size:12px;margin:8px 0 4px;direction:rtl;">'
@@ -2854,12 +2910,28 @@ elif has_strategies:
             a_color = "green" if actual_pnl >= 0 else "red"
             glow = "glow-green" if actual_pnl >= 0 else "glow-red"
 
+            _result_status = str(row.get("result_status", "") or "")
+            _STATUS_BADGE = {
+                "max_profit": (C_GREEN, "מקסימום רווח"),
+                "partial":    (C_BLUE,  "רווח חלקי"),
+                "max_loss":   (C_RED,   "הפסד מקסימלי"),
+                "zero":       (C_DIM,   "אפס"),
+            }
+            _s_color, _s_label = _STATUS_BADGE.get(
+                _result_status, (C_DIM, _result_status or "—"))
+            _status_badge_html = (
+                f'<span style="display:inline-block;padding:4px 12px;border-radius:20px;'
+                f'font-size:12px;font-weight:700;background:rgba(0,0,0,0.2);'
+                f'border:1px solid {_s_color};color:{_s_color};">{_s_label}</span>'
+            ) if _result_status else "—"
+
             st.markdown(
                 f'<div class="metric-grid">'
                 f'<div class="metric-card"><div class="label">Settlement Index</div><div class="value white">{fmt_num(settle_price)}</div></div>'
                 f'<div class="metric-card"><div class="label">Position</div><div style="margin-top:8px">{zone_badge}</div></div>'
                 f'<div class="metric-card {glow}"><div class="label">Actual P&L</div><div class="value {a_color}">{fmt_ils(actual_pnl)}</div></div>'
                 f'<div class="metric-card"><div class="label">Max Possible</div><div class="value blue">{fmt_ils(max_profit)}</div></div>'
+                f'<div class="metric-card"><div class="label">תוצאה</div><div style="margin-top:8px">{_status_badge_html}</div></div>'
                 f'</div>', unsafe_allow_html=True)
 
             render_legs_table(row)
