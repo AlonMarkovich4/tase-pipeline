@@ -17,6 +17,12 @@ import plotly.graph_objects as go
 from datetime import datetime, date, timezone
 from zoneinfo import ZoneInfo
 
+try:
+    from streamlit_autorefresh import st_autorefresh as _st_autorefresh
+    _HAS_AUTOREFRESH = True
+except ImportError:
+    _HAS_AUTOREFRESH = False
+
 # ==================================================================
 # CONFIG
 # ==================================================================
@@ -876,6 +882,7 @@ def get_available_expiries() -> list:
     return []
 
 
+@st.cache_data(ttl=30)
 def get_demo_balance() -> float:
     if not SUPABASE_URL or not SUPABASE_KEY:
         return DEMO_INITIAL_BALANCE
@@ -898,6 +905,7 @@ def _update_demo_balance(new_balance: float, change: float, reason: str):
                content=json.dumps({"balance": round(new_balance, 2),
                                    "change_amount": round(change, 2),
                                    "change_reason": reason}), timeout=10)
+    get_demo_balance.clear()
 
 
 def save_demo_trade(trade: dict) -> bool:
@@ -907,9 +915,13 @@ def save_demo_trade(trade: dict) -> bool:
     h["Prefer"] = "return=minimal"
     r = httpx.post(f"{SUPABASE_URL}/rest/v1/demo_trades", headers=h,
                    content=json.dumps(trade), timeout=10)
-    return r.status_code in (200, 201)
+    if r.status_code in (200, 201):
+        load_demo_trades.clear()
+        return True
+    return False
 
 
+@st.cache_data(ttl=30)
 def load_demo_trades(status: str = "open") -> list:
     if not SUPABASE_URL or not SUPABASE_KEY:
         return []
@@ -938,6 +950,8 @@ def close_demo_trade(trade_id: str, settlement_index: float,
         "close_reason": reason,
         "closed_at": datetime.now(timezone.utc).isoformat(),
     }), timeout=10)
+    if r.status_code in (200, 204):
+        load_demo_trades.clear()
     return r.status_code in (200, 204)
 
 
@@ -1531,6 +1545,10 @@ now_il = datetime.now(TZ)
 live_index = get_live_index()
 freshness = get_last_update()
 
+# Auto-refresh every 2 min (component hidden; runs silently)
+if _HAS_AUTOREFRESH:
+    _st_autorefresh(interval=120_000, limit=None, key="dashboard_refresh")
+
 st.markdown(f"""
 <div class="dash-header">
     <h1>◆ TA-35 — Iron Condor Strategy Desk</h1>
@@ -1656,7 +1674,7 @@ with st.sidebar:
     st.markdown(f"""
     <div style="border-top:1px solid {C_BORDER};margin:16px 0;padding-top:14px;">
         <div style="color:{C_DIM};font-size:11px;text-align:center;">
-            Auto-refresh 2 min<br>Multiplier: {MULTIPLIER}₪/pt
+            מתרענן כל 2 דק׳<br>Multiplier: {MULTIPLIER}₪/pt
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1829,8 +1847,7 @@ elif nav_page == "🏠 Home":
     #    intervals (nearest expiry) by a blended quality score:
     #    60% win-probability (from short-leg deltas) + 40% reward.
     # ─────────────────────────────────────────────────────────────
-    st.markdown('<div class="section-hdr">🎯 ההמלצה השבועית</div>',
-                unsafe_allow_html=True)
+    render_section_header("🎯 ההמלצה השבועית")
 
     rec = []
     rec_meta = {}
@@ -1912,7 +1929,7 @@ elif nav_page == "🏠 Home":
                 if st.button("📲 שגר לדמו", key=f"home_demo_{pct}",
                              disabled=in_demo, use_container_width=True):
                     if save_demo_trade(demo_trade_from_strategy(r)):
-                        st.cache_data.clear()
+
                         st.success(f"✅ נשלח לדמו: {dname}")
                         st.rerun()
                     else:
@@ -1933,8 +1950,7 @@ elif nav_page == "🏠 Home":
     # ─────────────────────────────────────────────────────────────
     # 2) AT RISK NOW — open strategies near a breakeven
     # ─────────────────────────────────────────────────────────────
-    st.markdown('<div class="section-hdr">⚠️ בסיכון עכשיו</div>',
-                unsafe_allow_html=True)
+    render_section_header("⚠️ בסיכון עכשיו")
     risk = []
     if has_strategies and live_index > 0:
         act = df[~df["_is_settled"]]
@@ -1975,8 +1991,7 @@ elif nav_page == "🏠 Home":
     # ─────────────────────────────────────────────────────────────
     # 3) WEEK PULSE
     # ─────────────────────────────────────────────────────────────
-    st.markdown('<div class="section-hdr">📊 דופק השבוע</div>',
-                unsafe_allow_html=True)
+    render_section_header("📊 דופק השבוע")
     week_pnl = 0.0
     lead_txt = "—"
     if has_strategies:
@@ -2013,8 +2028,7 @@ elif nav_page == "🏠 Home":
     # ─────────────────────────────────────────────────────────────
     # 4) PREFERRED INTERVALS — drives the "real" weekly win-rate
     # ─────────────────────────────────────────────────────────────
-    st.markdown('<div class="section-hdr">⭐ מרווחים מועדפים</div>',
-                unsafe_allow_html=True)
+    render_section_header("⭐ מרווחים מועדפים")
     st.caption("בחר את המרווחים שאתה באמת סוחר. הסיכום השבועי ב-Telegram "
                "ו-P&L השבועי יחושבו רק עליהם (במקום על כל 8).")
     pick = st.multiselect(
@@ -2068,7 +2082,6 @@ elif nav_page == "🕹️ Demo Trading":
             st.session_state.settled_ids.add(et_id)
             _results.append({"id": et_id, "name": et.get("strategy_name", ""),
                              "expiry": et_expiry, "settle": settle_idx, "pnl": final_pnl})
-        st.cache_data.clear()
         _settlement_dialog(_results, _bal)
 
     # ── Shared state ──
@@ -2224,7 +2237,7 @@ elif nav_page == "🕹️ Demo Trading":
                         st.success(f"✅ עסקה {tid} בוצעה! — {tpl_name} | פקיעה {trade_expiry}")
                         st.session_state.sandbox_legs = []
                         st.session_state.sandbox_template = None
-                        st.cache_data.clear()
+
                         st.rerun()
                     else:
                         st.error("❌ שגיאה בשמירת העסקה.")
@@ -2589,7 +2602,7 @@ elif nav_page == "🕹️ Demo Trading":
                         f_pnl = sandbox_trade_pnl(t, s_idx)
                         close_demo_trade(t_id, s_idx, f_pnl, "manual_close")
                         _update_demo_balance(current_balance + f_pnl, f_pnl, f"close_{t_id}")
-                        st.cache_data.clear()
+
                         st.rerun()
                 st.markdown("---")
         else:
@@ -2783,7 +2796,7 @@ elif has_strategies:
                              disabled=already_in_demo,
                              key=f"to_demo_{sel_active_expiry}_{sel_active_interval}"):
                     if save_demo_trade(demo_trade_from_strategy(row)):
-                        st.cache_data.clear()
+
                         st.success(f"✅ נשלח לתיק הדמו: {demo_name} | פקיעה {sel_active_expiry}")
                         st.rerun()
                     else:
@@ -2814,8 +2827,7 @@ elif has_strategies:
                     "n_total": len(idf), "n_wins": int((idf["actual_pnl_ils"] > 0).sum()),
                 })
 
-            st.markdown('<div class="section-hdr">📊 מה יכולת להרוויח? — השוואת מרווחים</div>',
-                        unsafe_allow_html=True)
+            render_section_header("📊 מה יכולת להרוויח? — השוואת מרווחים")
 
             _comp_rows = []
             for cd in comparison_data:
@@ -2848,8 +2860,7 @@ elif has_strategies:
                 hide_index=True,
             )
 
-            st.markdown('<div class="section-hdr">📈 Max Profit vs. Actual P&L</div>',
-                        unsafe_allow_html=True)
+            render_section_header("📈 Max Profit vs. Actual P&L")
             abs_max = max(max(abs(cd["max_possible"]), abs(cd["actual_pnl"]))
                           for cd in comparison_data) if comparison_data else 1
             for cd in comparison_data:
@@ -2863,8 +2874,7 @@ elif has_strategies:
                     f'<div class="cmp-line"><span class="cmp-lbl">Actual</span><div class="cmp-track"><div class="cmp-fill" style="width:{actual_w:.0f}%;background:{bar_c}"></div></div><span class="cmp-val" style="color:{bar_c}">{fmt_ils(cd["actual_pnl"])}</span></div>'
                     f'</div>', unsafe_allow_html=True)
 
-            st.markdown('<div class="section-hdr">🔍 ניתוח מפורט לפי פקיעה ומרווח</div>',
-                        unsafe_allow_html=True)
+            render_section_header("🔍 ניתוח מפורט לפי פקיעה ומרווח")
 
             hist_expiry_dates = sorted(all_history["expiry_date"].unique())
             hist_expiry_labels = {}
@@ -2983,7 +2993,7 @@ else:
 st.markdown(f"""
 <div style="text-align:center; padding:30px 0 10px; color:{C_DIM}; font-size:11px;">
     TA-35 Iron Condor Strategy Desk &mdash; Automated Pipeline<br>
-    Auto-refresh 2 min &nbsp;|&nbsp; Multiplier: {MULTIPLIER}₪/pt
+    מתרענן כל 2 דק׳ &nbsp;|&nbsp; Multiplier: {MULTIPLIER}₪/pt
     &nbsp;|&nbsp; {now_il.strftime("%H:%M:%S")} IL
 </div>
 """, unsafe_allow_html=True)
