@@ -1290,18 +1290,30 @@ def render_payoff_chart(row, ref_price: float = 0, ref_label: str = ""):
 
 def render_legs_table(row):
     legs = [
-        ("Long Put", "BUY", row.get("long_put_strike", 0), row.get("long_put_price", 0)),
-        ("Short Put", "SELL", row.get("short_put_strike", 0), row.get("short_put_price", 0)),
-        ("Short Call", "SELL", row.get("short_call_strike", 0), row.get("short_call_price", 0)),
-        ("Long Call", "BUY", row.get("long_call_strike", 0), row.get("long_call_price", 0)),
+        ("Long Put",   "BUY",  row.get("long_put_strike",   0), row.get("long_put_price",   0),
+         row.get("long_put_delta",   0)),
+        ("Short Put",  "SELL", row.get("short_put_strike",  0), row.get("short_put_price",  0),
+         row.get("short_put_delta",  0)),
+        ("Short Call", "SELL", row.get("short_call_strike", 0), row.get("short_call_price", 0),
+         row.get("short_call_delta", 0)),
+        ("Long Call",  "BUY",  row.get("long_call_strike",  0), row.get("long_call_price",  0),
+         row.get("long_call_delta",  0)),
     ]
-    html = '<div class="table-scroll"><table><thead><tr><th>Leg</th><th>Action</th><th>Strike</th><th>Premium (₪)</th></tr></thead><tbody>'
-    for name, action, strike, price in legs:
-        css = "sell" if action == "SELL" else "buy"
-        price_ils = price * MULTIPLIER
-        html += f'<tr><td>{name}</td><td class="{css}">{action}</td><td><strong>{fmt_num(strike, 0)}</strong></td><td>{fmt_num(price_ils, 0)}</td></tr>'
-    html += "</tbody></table></div>"
-    st.markdown(html, unsafe_allow_html=True)
+    legs_df = pd.DataFrame(legs, columns=["Leg", "Action", "Strike", "Premium (₪)", "Delta"])
+    legs_df["Premium (₪)"] = (legs_df["Premium (₪)"] * MULTIPLIER).round(0)
+    legs_df["Delta"] = legs_df["Delta"].round(0).astype(int)
+    st.dataframe(
+        legs_df,
+        use_container_width=True,
+        column_config={
+            "Leg":         st.column_config.TextColumn("רגל"),
+            "Action":      st.column_config.TextColumn("פעולה"),
+            "Strike":      st.column_config.NumberColumn("Strike", format="%.0f"),
+            "Premium (₪)": st.column_config.NumberColumn("Premium (₪)", format="%.0f ₪"),
+            "Delta":       st.column_config.NumberColumn("Delta", format="%d"),
+        },
+        hide_index=True,
+    )
 
 
 def render_expiry_metrics(row):
@@ -2758,21 +2770,36 @@ elif has_strategies:
             st.markdown('<div class="section-hdr">📊 מה יכולת להרוויח? — השוואת מרווחים</div>',
                         unsafe_allow_html=True)
 
-            best_pct = max(comparison_data, key=lambda x: x["actual_pnl"])["pct"] if comparison_data else 0
-            comp_html = '<div class="table-scroll"><table><thead><tr><th>Interval</th><th>Expiries</th><th>Wins</th><th>Win Rate</th><th>Max Possible</th><th>Actual P&L</th><th>Utilization</th></tr></thead><tbody>'
+            _comp_rows = []
             for cd in comparison_data:
-                pct = cd["pct"]
-                actual = cd["actual_pnl"]
-                max_p = cd["max_possible"]
-                wr = (cd["n_wins"] / cd["n_total"] * 100) if cd["n_total"] > 0 else 0
-                util = (actual / max_p * 100) if max_p > 0 else 0
-                a_css = "buy" if actual > 0 else ("sell" if actual < 0 else "")
-                wr_css = "buy" if wr >= 70 else ("sell" if wr < 40 else "")
-                u_css = "buy" if util > 50 else ("sell" if util < 0 else "")
-                hl = ' style="background:rgba(0,230,118,0.06)"' if pct == best_pct else ""
-                comp_html += f'<tr{hl}><td><strong>{pct:.1f}%</strong></td><td>{cd["n_total"]}</td><td>{cd["n_wins"]}</td><td class="{wr_css}">{wr:.0f}%</td><td class="buy">{fmt_ils(max_p)}</td><td class="{a_css}"><strong>{fmt_ils(actual)}</strong></td><td class="{u_css}">{util:.0f}%</td></tr>'
-            comp_html += '</tbody></table></div>'
-            st.markdown(comp_html, unsafe_allow_html=True)
+                wr   = cd["n_wins"] / cd["n_total"] * 100 if cd["n_total"] else 0
+                util = cd["actual_pnl"] / cd["max_possible"] * 100 if cd["max_possible"] else 0
+                _comp_rows.append({
+                    "מרווח %":          cd["pct"],
+                    "פקיעות":           cd["n_total"],
+                    "ניצחונות":         cd["n_wins"],
+                    "Win Rate %":       round(wr, 1),
+                    "Max Possible (₪)": cd["max_possible"],
+                    "Actual P&L (₪)":   cd["actual_pnl"],
+                    "ניצול %":          round(util, 1),
+                })
+            _comp_df = pd.DataFrame(_comp_rows)
+            st.dataframe(
+                _comp_df,
+                use_container_width=True,
+                column_config={
+                    "מרווח %":          st.column_config.NumberColumn(format="%.1f%%"),
+                    "פקיעות":           st.column_config.NumberColumn(format="%d"),
+                    "ניצחונות":         st.column_config.NumberColumn(format="%d"),
+                    "Win Rate %":       st.column_config.ProgressColumn(
+                                            min_value=0, max_value=100, format="%.0f%%"),
+                    "Max Possible (₪)": st.column_config.NumberColumn(format="%+,.0f ₪"),
+                    "Actual P&L (₪)":   st.column_config.NumberColumn(format="%+,.0f ₪"),
+                    "ניצול %":          st.column_config.ProgressColumn(
+                                            min_value=-100, max_value=100, format="%.0f%%"),
+                },
+                hide_index=True,
+            )
 
             st.markdown('<div class="section-hdr">📈 Max Profit vs. Actual P&L</div>',
                         unsafe_allow_html=True)
@@ -2837,16 +2864,37 @@ elif has_strategies:
 
             render_legs_table(row)
 
-            strike_table = '<div class="table-scroll"><table><thead><tr><th>Strike Level</th><th>Value</th><th>Settlement</th><th>Distance</th></tr></thead><tbody>'
-            strikes = [("Long Put", lp_s), ("Short Put", sp_s), ("Short Call", sc_s), ("Long Call", lc_s)]
-            for label, strike_val in strikes:
-                if strike_val > 0 and settle_price > 0:
-                    dist = settle_price - strike_val
-                    dist_css = "buy" if dist > 0 else "sell"
-                    marker = " ◄" if abs(dist) == min(abs(settle_price - s) for _, s in strikes if s > 0) else ""
-                    strike_table += f'<tr><td>{label}</td><td><strong>{fmt_num(strike_val, 0)}</strong></td><td>{fmt_num(settle_price)}</td><td class="{dist_css}">{dist:+.2f}{marker}</td></tr>'
-            strike_table += '</tbody></table></div>'
-            st.markdown(strike_table, unsafe_allow_html=True)
+            _strikes_list = [
+                ("Long Put",   lp_s), ("Short Put",  sp_s),
+                ("Short Call", sc_s), ("Long Call",  lc_s),
+            ]
+            if settle_price > 0:
+                _valid_dists = [abs(settle_price - s) for _, s in _strikes_list if s > 0]
+                _closest_dist = min(_valid_dists) if _valid_dists else None
+                _strike_rows = []
+                for _lbl, _sv in _strikes_list:
+                    if _sv > 0:
+                        _dist = settle_price - _sv
+                        _strike_rows.append({
+                            "רמת Strike": _lbl,
+                            "ערך":        _sv,
+                            "סטלמנט":     settle_price,
+                            "מרחק":       round(_dist, 2),
+                            "קרוב ביותר": "◄" if _closest_dist is not None and abs(_dist) == _closest_dist else "",
+                        })
+                if _strike_rows:
+                    st.dataframe(
+                        pd.DataFrame(_strike_rows),
+                        use_container_width=True,
+                        column_config={
+                            "רמת Strike": st.column_config.TextColumn(),
+                            "ערך":        st.column_config.NumberColumn(format="%.0f"),
+                            "סטלמנט":     st.column_config.NumberColumn(format="%.2f"),
+                            "מרחק":       st.column_config.NumberColumn(format="%+.2f"),
+                            "קרוב ביותר": st.column_config.TextColumn(),
+                        },
+                        hide_index=True,
+                    )
 
             render_expiry_metrics(row)
             render_payoff_chart(row, ref_price=settle_price,
