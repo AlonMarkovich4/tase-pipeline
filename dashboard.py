@@ -2083,255 +2083,256 @@ elif nav_page == "🕹️ Demo Trading":
         base = 4500  # reasonable TA-35 range, not the old 2000
     legs = st.session_state.sandbox_legs
 
+    _tab1, _tab2, _tab3 = st.tabs([
+        "📊 בונה אסטרטגיה", "⛓️ שרשרת אופציות", "💼 תיק דמו",
+    ])
+
     # ================================================================
-    # § TOP MODULE — Payoff Chart (hero element)
+    # § TAB 1 — Payoff Builder + Strategy Editor
     # ================================================================
-    if legs and any(l["premium_pts"] > 0 for l in legs):
-        metrics = sandbox_compute_metrics(legs, base)
-        net_prem = metrics["net_premium"]
-        max_profit = metrics["max_profit"]
-        max_loss = metrics["max_loss"]
-        be_list = metrics["breakevens"]
-        prem_color = "green" if net_prem > 0 else "red"
-        be_str = " / ".join(fmt_num(b, 0) for b in be_list) if be_list else "—"
+    with _tab1:
+        if legs and any(l["premium_pts"] > 0 for l in legs):
+            metrics = sandbox_compute_metrics(legs, base)
+            net_prem = metrics["net_premium"]
+            max_profit = metrics["max_profit"]
+            max_loss = metrics["max_loss"]
+            be_list = metrics["breakevens"]
+            prem_color = "green" if net_prem > 0 else "red"
+            be_str = " / ".join(fmt_num(b, 0) for b in be_list) if be_list else "—"
 
-        # Show price warning if iron condor metrics are impossible
-        if metrics.get("price_warning"):
-            st.warning(metrics["price_warning"])
+            if metrics.get("price_warning"):
+                st.warning(metrics["price_warning"])
 
-        st.markdown(
-            f'<div class="metric-grid">'
-            f'<div class="metric-card"><div class="label">Net Premium (pts)</div>'
-            f'<div class="value {prem_color}">{fmt_num(net_prem)}</div></div>'
-            f'<div class="metric-card glow-green"><div class="label">Max Profit</div>'
-            f'<div class="value green">{fmt_ils(max_profit)}</div></div>'
-            f'<div class="metric-card glow-red"><div class="label">Max Loss</div>'
-            f'<div class="value red">{fmt_ils(max_loss)}</div></div>'
-            f'<div class="metric-card"><div class="label">Breakeven(s)</div>'
-            f'<div class="value white" style="font-size:18px;">{be_str}</div></div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        # Build chart
-        all_strikes = [l["strike"] for l in legs]
-        min_s, max_s = min(all_strikes), max(all_strikes)
-        margin = max(100, (max_s - min_s) * 0.8)
-        x_range = np.linspace(min_s - margin, max_s + margin, 600)
-        y_pnl = sandbox_compute_payoff(legs, x_range)
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=x_range, y=np.where(y_pnl >= 0, y_pnl, 0),
-                                 fill="tozeroy", fillcolor="rgba(38,222,129,0.45)",
-                                 line=dict(width=0), showlegend=False, hoverinfo="skip"))
-        fig.add_trace(go.Scatter(x=x_range, y=np.where(y_pnl < 0, y_pnl, 0),
-                                 fill="tozeroy", fillcolor="rgba(255,77,77,0.45)",
-                                 line=dict(width=0), showlegend=False, hoverinfo="skip"))
-        fig.add_trace(go.Scatter(x=x_range, y=y_pnl, mode="lines",
-                                 line=dict(color="rgba(255,255,255,0.4)", width=1.5),
-                                 showlegend=False,
-                                 hovertemplate="Index: %{x:,.0f}<br>P&L: %{y:,.0f} ₪<extra></extra>"))
-        fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.15)", width=1))
-        if be_list:
-            fig.add_trace(go.Scatter(
-                x=be_list, y=[0] * len(be_list), mode="markers+text",
-                marker=dict(color=C_ORANGE, size=11, symbol="circle",
-                            line=dict(color=C_BG, width=2)),
-                text=[f"BE: {b:,.0f}" for b in be_list],
-                textposition="top center", textfont=dict(size=11, color=C_ORANGE),
-                showlegend=False, hovertemplate="Breakeven: %{x:,.0f}<extra></extra>"))
-        if live_index > 0:
-            fig.add_vline(x=live_index, line=dict(color="#00BCD4", width=2, dash="dot"))
-            fig.add_annotation(x=live_index, y=max(y_pnl) * 0.85,
-                               text=f"Live: {live_index:,.2f}", showarrow=False,
-                               font=dict(size=12, color="#00BCD4"),
-                               bgcolor="rgba(11,13,16,0.9)",
-                               bordercolor="#00BCD4", borderwidth=1, borderpad=5)
-        for leg in legs:
-            color = C_GREEN if leg["action"] == "BUY" else C_RED
-            label = f"{'B' if leg['action']=='BUY' else 'S'} {leg['type'][0]} {leg['strike']:,.0f}"
-            fig.add_vline(x=leg["strike"], line=dict(color=color, width=1, dash="dash"))
-            fig.add_annotation(x=leg["strike"], y=min(y_pnl) * 0.9, text=label,
-                               showarrow=False, font=dict(size=10, color=color),
-                               bgcolor="rgba(11,13,16,0.8)", borderpad=3)
-        fig.update_layout(
-            template="plotly_dark", paper_bgcolor=C_BG, plot_bgcolor=C_BG,
-            height=420, margin=dict(l=55, r=30, t=25, b=50),
-            xaxis=dict(title="TA-35 Index at Expiry", gridcolor="rgba(255,255,255,0.04)",
-                       zeroline=False, tickformat=",", tickfont=dict(size=10, color=C_DIM),
-                       title_font=dict(size=11, color=C_DIM)),
-            yaxis=dict(title="P&L (₪)", gridcolor="rgba(255,255,255,0.06)", zeroline=False,
-                       tickformat=",", tickfont=dict(size=10, color=C_DIM),
-                       title_font=dict(size=11, color=C_DIM)),
-            showlegend=False, hovermode="x unified",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # ── Legs summary + Execute button ──
-        legs_html = ('<div class="table-scroll"><table><thead><tr>'
-                     '<th>Leg</th><th>Action</th><th>Strike</th>'
-                     '<th>Premium (₪)</th><th>Qty</th><th>Cost/Credit (₪)</th>'
-                     '</tr></thead><tbody>')
-        for leg in legs:
-            css = "sell" if leg["action"] == "SELL" else "buy"
-            prem_ils = leg["premium_pts"] * MULTIPLIER
-            sign = -1 if leg["action"] == "BUY" else 1
-            cost = sign * prem_ils * leg["qty"]
-            cost_css = "buy" if cost > 0 else "sell"
-            cost_lbl = f"+{cost:,.0f}" if cost > 0 else f"{cost:,.0f}"
-            legs_html += (f'<tr><td>{leg["type"]}</td><td class="{css}">{leg["action"]}</td>'
-                          f'<td><strong>{fmt_num(leg["strike"], 0)}</strong></td>'
-                          f'<td>{fmt_num(prem_ils, 0)}</td><td>{leg["qty"]}</td>'
-                          f'<td class="{cost_css}"><strong>{cost_lbl}</strong></td></tr>')
-        legs_html += '</tbody></table></div>'
-        st.markdown(legs_html, unsafe_allow_html=True)
-
-        # Execute row
-        exec_cols = st.columns([1.5, 2, 1.5])
-        with exec_cols[0]:
-            _real_expiries = get_available_expiries()
-            if _real_expiries:
-                trade_expiry = st.selectbox("📅 פקיעה", _real_expiries, index=0,
-                                            key="sb_trade_expiry")
-            else:
-                trade_expiry = str(date.today())
-        with exec_cols[1]:
-            tpl_name = SANDBOX_TEMPLATES.get(
-                st.session_state.sandbox_template or "empty", {}).get("name", "Custom")
             st.markdown(
-                f'<div style="padding:10px 0;text-align:center;">'
-                f'<strong style="color:{C_TEXT};">{tpl_name}</strong>'
-                f'<span style="color:{C_DIM};font-size:12px;"> | {len(legs)} רגליים</span>'
-                f'</div>', unsafe_allow_html=True)
-        with exec_cols[2]:
-            if st.button("🚀 שגר אסטרטגיה לתיק דמו", key="sb_execute",
-                          use_container_width=True, type="primary"):
-                tid = str(uuid.uuid4())[:12]
-                ok = save_demo_trade({
-                    "trade_id": tid, "strategy_name": tpl_name,
-                    "expiry_date": str(trade_expiry), "status": "open",
-                    "legs": legs,
-                    "entry_index": live_index if live_index > 0 else base,
-                    "net_premium_pts": round(net_prem, 4),
-                    "max_profit_ils": round(max_profit, 2),
-                    "max_risk_ils": round(abs(max_loss), 2),
-                })
-                if ok:
-                    st.success(f"✅ עסקה {tid} בוצעה! — {tpl_name} | פקיעה {trade_expiry}")
-                    st.session_state.sandbox_legs = []
-                    st.session_state.sandbox_template = None
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.error("❌ שגיאה בשמירת העסקה.")
-
-    elif legs:
-        st.warning("הזן פרמיות (Premium) לפחות לרגל אחת כדי לראות את הגרף.")
-    else:
-        st.markdown(
-            f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
-            f'padding:60px 20px;text-align:center;margin:20px 0;">'
-            f'<div style="font-size:48px;margin-bottom:12px;">📊</div>'
-            f'<div style="color:{C_TEXT};font-size:18px;font-weight:700;">הגרף יופיע כאן</div>'
-            f'<div style="color:{C_DIM};font-size:14px;margin-top:6px;">'
-            f'בחר תבנית אסטרטגיה למטה או הוסף רגליים מהשרשרת</div></div>',
-            unsafe_allow_html=True)
-
-    # ================================================================
-    # § STRATEGY BUILDER — Template + Leg Editor
-    # ================================================================
-    with st.expander("📐 בחר אסטרטגיה והגדר רגליים", expanded=not bool(legs)):
-        ctrl_cols = st.columns([2.5, 1.5, 1.5])
-        with ctrl_cols[0]:
-            tpl_labels = {k: f"{v['icon']} {v['name']}" for k, v in SANDBOX_TEMPLATES.items()}
-            sel_tpl = st.selectbox(
-                "תבנית אסטרטגיה",
-                list(SANDBOX_TEMPLATES.keys()),
-                format_func=lambda k: tpl_labels[k],
-                index=0,
-                key="sb_template_select",
-                label_visibility="collapsed",
+                f'<div class="metric-grid">'
+                f'<div class="metric-card"><div class="label">Net Premium (pts)</div>'
+                f'<div class="value {prem_color}">{fmt_num(net_prem)}</div></div>'
+                f'<div class="metric-card glow-green"><div class="label">Max Profit</div>'
+                f'<div class="value green">{fmt_ils(max_profit)}</div></div>'
+                f'<div class="metric-card glow-red"><div class="label">Max Loss</div>'
+                f'<div class="value red">{fmt_ils(max_loss)}</div></div>'
+                f'<div class="metric-card"><div class="label">Breakeven(s)</div>'
+                f'<div class="value white" style="font-size:18px;">{be_str}</div></div>'
+                f'</div>',
+                unsafe_allow_html=True,
             )
-        with ctrl_cols[1]:
-            if st.button("📐 טען תבנית", use_container_width=True, key="sb_load_tpl"):
-                st.session_state.sandbox_template = sel_tpl
-                st.session_state.sandbox_legs = _apply_template(sel_tpl, base)
-                st.rerun()
-        with ctrl_cols[2]:
-            if st.button("🧹 נקה", use_container_width=True, key="sb_clear"):
-                st.session_state.sandbox_legs = []
-                st.session_state.sandbox_template = None
-                st.rerun()
 
-        # ── Editable Leg Rows ──
-        if legs:
-            updated_legs = []
-            for idx, leg in enumerate(legs):
-                cols = st.columns([1.5, 1.5, 2, 2, 1.2, 0.7])
-                with cols[0]:
-                    leg_type = st.selectbox("סוג", ["Call", "Put"],
-                                            index=0 if leg["type"] == "Call" else 1,
-                                            key=f"sb_lt_{idx}",
-                                            label_visibility="collapsed" if idx > 0 else "visible")
-                with cols[1]:
-                    leg_action = st.selectbox("פעולה", ["BUY", "SELL"],
-                                              index=0 if leg["action"] == "BUY" else 1,
-                                              key=f"sb_la_{idx}",
-                                              label_visibility="collapsed" if idx > 0 else "visible")
-                with cols[2]:
-                    leg_strike = st.number_input("Strike", min_value=0.0, max_value=5000.0,
-                                                 value=float(leg["strike"]), step=10.0,
-                                                 key=f"sb_ls_{idx}",
-                                                 label_visibility="collapsed" if idx > 0 else "visible")
-                with cols[3]:
-                    leg_prem = st.number_input("Premium (pts)", min_value=0.0, max_value=500.0,
-                                               value=float(leg["premium_pts"]), step=0.5,
-                                               key=f"sb_lp_{idx}",
-                                               label_visibility="collapsed" if idx > 0 else "visible")
-                with cols[4]:
-                    leg_qty = st.number_input("Qty", min_value=1, max_value=50,
-                                              value=int(leg.get("qty", 1)), step=1,
-                                              key=f"sb_lq_{idx}",
-                                              label_visibility="collapsed" if idx > 0 else "visible")
-                with cols[5]:
-                    if idx > 0:
-                        st.write("")
-                    if st.button("🗑️", key=f"sb_del_{idx}", help="הסר"):
-                        continue
-                updated_legs.append({"type": leg_type, "action": leg_action,
-                                     "strike": leg_strike, "premium_pts": leg_prem, "qty": leg_qty})
-            if len(updated_legs) != len(legs):
-                st.session_state.sandbox_legs = updated_legs
-                st.rerun()
-            else:
-                st.session_state.sandbox_legs = updated_legs
-                legs = updated_legs
+            # Build payoff chart
+            all_strikes = [l["strike"] for l in legs]
+            min_s, max_s = min(all_strikes), max(all_strikes)
+            margin = max(100, (max_s - min_s) * 0.8)
+            x_range = np.linspace(min_s - margin, max_s + margin, 600)
+            y_pnl = sandbox_compute_payoff(legs, x_range)
 
-        add_col, _, _ = st.columns([1, 1, 3])
-        with add_col:
-            if st.button("➕ הוסף רגל", use_container_width=True, key="sb_add_leg"):
-                st.session_state.sandbox_legs.append(
-                    {"type": "Call", "action": "BUY",
-                     "strike": round(base / 10) * 10, "premium_pts": 0.0, "qty": 1})
-                st.rerun()
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=x_range, y=np.where(y_pnl >= 0, y_pnl, 0),
+                                     fill="tozeroy", fillcolor="rgba(38,222,129,0.45)",
+                                     line=dict(width=0), showlegend=False, hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=x_range, y=np.where(y_pnl < 0, y_pnl, 0),
+                                     fill="tozeroy", fillcolor="rgba(255,77,77,0.45)",
+                                     line=dict(width=0), showlegend=False, hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=x_range, y=y_pnl, mode="lines",
+                                     line=dict(color="rgba(255,255,255,0.4)", width=1.5),
+                                     showlegend=False,
+                                     hovertemplate="Index: %{x:,.0f}<br>P&L: %{y:,.0f} ₪<extra></extra>"))
+            fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.15)", width=1))
+            if be_list:
+                fig.add_trace(go.Scatter(
+                    x=be_list, y=[0] * len(be_list), mode="markers+text",
+                    marker=dict(color=C_ORANGE, size=11, symbol="circle",
+                                line=dict(color=C_BG, width=2)),
+                    text=[f"BE: {b:,.0f}" for b in be_list],
+                    textposition="top center", textfont=dict(size=11, color=C_ORANGE),
+                    showlegend=False, hovertemplate="Breakeven: %{x:,.0f}<extra></extra>"))
+            if live_index > 0:
+                fig.add_vline(x=live_index, line=dict(color="#00BCD4", width=2, dash="dot"))
+                fig.add_annotation(x=live_index, y=max(y_pnl) * 0.85,
+                                   text=f"Live: {live_index:,.2f}", showarrow=False,
+                                   font=dict(size=12, color="#00BCD4"),
+                                   bgcolor="rgba(11,13,16,0.9)",
+                                   bordercolor="#00BCD4", borderwidth=1, borderpad=5)
+            for leg in legs:
+                color = C_GREEN if leg["action"] == "BUY" else C_RED
+                label = f"{'B' if leg['action']=='BUY' else 'S'} {leg['type'][0]} {leg['strike']:,.0f}"
+                fig.add_vline(x=leg["strike"], line=dict(color=color, width=1, dash="dash"))
+                fig.add_annotation(x=leg["strike"], y=min(y_pnl) * 0.9, text=label,
+                                   showarrow=False, font=dict(size=10, color=color),
+                                   bgcolor="rgba(11,13,16,0.8)", borderpad=3)
+            fig.update_layout(
+                template="plotly_dark", paper_bgcolor=C_BG, plot_bgcolor=C_BG,
+                height=420, margin=dict(l=55, r=30, t=25, b=50),
+                xaxis=dict(title="TA-35 Index at Expiry", gridcolor="rgba(255,255,255,0.04)",
+                           zeroline=False, tickformat=",", tickfont=dict(size=10, color=C_DIM),
+                           title_font=dict(size=11, color=C_DIM)),
+                yaxis=dict(title="P&L (₪)", gridcolor="rgba(255,255,255,0.06)", zeroline=False,
+                           tickformat=",", tickfont=dict(size=10, color=C_DIM),
+                           title_font=dict(size=11, color=C_DIM)),
+                showlegend=False, hovermode="x unified",
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-    # ================================================================
-    # § MIDDLE MODULE — Interactive Option Chain
-    # ================================================================
-    st.markdown('<div class="section-hdr">⛓️ שרשרת אופציות — Option Chain</div>',
+            # ── Legs summary ──
+            legs_html = ('<div class="table-scroll"><table><thead><tr>'
+                         '<th>Leg</th><th>Action</th><th>Strike</th>'
+                         '<th>Premium (₪)</th><th>Qty</th><th>Cost/Credit (₪)</th>'
+                         '</tr></thead><tbody>')
+            for leg in legs:
+                css = "sell" if leg["action"] == "SELL" else "buy"
+                prem_ils = leg["premium_pts"] * MULTIPLIER
+                sign = -1 if leg["action"] == "BUY" else 1
+                cost = sign * prem_ils * leg["qty"]
+                cost_css = "buy" if cost > 0 else "sell"
+                cost_lbl = f"+{cost:,.0f}" if cost > 0 else f"{cost:,.0f}"
+                legs_html += (f'<tr><td>{leg["type"]}</td><td class="{css}">{leg["action"]}</td>'
+                              f'<td><strong>{fmt_num(leg["strike"], 0)}</strong></td>'
+                              f'<td>{fmt_num(prem_ils, 0)}</td><td>{leg["qty"]}</td>'
+                              f'<td class="{cost_css}"><strong>{cost_lbl}</strong></td></tr>')
+            legs_html += '</tbody></table></div>'
+            st.markdown(legs_html, unsafe_allow_html=True)
+
+            # ── Execute row ──
+            exec_cols = st.columns([1.5, 2, 1.5])
+            with exec_cols[0]:
+                _real_expiries = get_available_expiries()
+                if _real_expiries:
+                    trade_expiry = st.selectbox("📅 פקיעה", _real_expiries, index=0,
+                                                key="sb_trade_expiry")
+                else:
+                    trade_expiry = str(date.today())
+            with exec_cols[1]:
+                tpl_name = SANDBOX_TEMPLATES.get(
+                    st.session_state.sandbox_template or "empty", {}).get("name", "Custom")
+                st.markdown(
+                    f'<div style="padding:10px 0;text-align:center;">'
+                    f'<strong style="color:{C_TEXT};">{tpl_name}</strong>'
+                    f'<span style="color:{C_DIM};font-size:12px;"> | {len(legs)} רגליים</span>'
+                    f'</div>', unsafe_allow_html=True)
+            with exec_cols[2]:
+                if st.button("🚀 שגר אסטרטגיה לתיק דמו", key="sb_execute",
+                              use_container_width=True, type="primary"):
+                    tid = str(uuid.uuid4())[:12]
+                    ok = save_demo_trade({
+                        "trade_id": tid, "strategy_name": tpl_name,
+                        "expiry_date": str(trade_expiry), "status": "open",
+                        "legs": legs,
+                        "entry_index": live_index if live_index > 0 else base,
+                        "net_premium_pts": round(net_prem, 4),
+                        "max_profit_ils": round(max_profit, 2),
+                        "max_risk_ils": round(abs(max_loss), 2),
+                    })
+                    if ok:
+                        st.success(f"✅ עסקה {tid} בוצעה! — {tpl_name} | פקיעה {trade_expiry}")
+                        st.session_state.sandbox_legs = []
+                        st.session_state.sandbox_template = None
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("❌ שגיאה בשמירת העסקה.")
+
+        elif legs:
+            st.warning("הזן פרמיות (Premium) לפחות לרגל אחת כדי לראות את הגרף.")
+        else:
+            st.markdown(
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
+                f'padding:60px 20px;text-align:center;margin:20px 0;">'
+                f'<div style="font-size:48px;margin-bottom:12px;">📊</div>'
+                f'<div style="color:{C_TEXT};font-size:18px;font-weight:700;">הגרף יופיע כאן</div>'
+                f'<div style="color:{C_DIM};font-size:14px;margin-top:6px;">'
+                f'בחר תבנית אסטרטגיה למטה או הוסף רגליים מהשרשרת</div></div>',
                 unsafe_allow_html=True)
 
-    expiry_dates = get_available_expiries()
+        # ── Strategy Builder ──
+        with st.expander("📐 בחר אסטרטגיה והגדר רגליים", expanded=not bool(legs)):
+            ctrl_cols = st.columns([2.5, 1.5, 1.5])
+            with ctrl_cols[0]:
+                tpl_labels = {k: f"{v['icon']} {v['name']}" for k, v in SANDBOX_TEMPLATES.items()}
+                sel_tpl = st.selectbox(
+                    "תבנית אסטרטגיה",
+                    list(SANDBOX_TEMPLATES.keys()),
+                    format_func=lambda k: tpl_labels[k],
+                    index=0,
+                    key="sb_template_select",
+                    label_visibility="collapsed",
+                )
+            with ctrl_cols[1]:
+                if st.button("📐 טען תבנית", use_container_width=True, key="sb_load_tpl"):
+                    st.session_state.sandbox_template = sel_tpl
+                    st.session_state.sandbox_legs = _apply_template(sel_tpl, base)
+                    st.rerun()
+            with ctrl_cols[2]:
+                if st.button("🧹 נקה", use_container_width=True, key="sb_clear"):
+                    st.session_state.sandbox_legs = []
+                    st.session_state.sandbox_template = None
+                    st.rerun()
 
-    if not expiry_dates:
-        st.markdown(
-            f'<div class="empty-state">'
-            f'<div class="es-icon">📊</div>'
-            f'<div class="es-title">אין נתוני אופציות זמינים</div>'
-            f'<div class="es-sub">המערכת תטען נתונים בזמן המסחר</div>'
-            f'</div>', unsafe_allow_html=True)
-    else:
-        chain_header = st.columns([2, 1, 1])
+            if legs:
+                updated_legs = []
+                for idx, leg in enumerate(legs):
+                    cols = st.columns([1.5, 1.5, 2, 2, 1.2, 0.7])
+                    with cols[0]:
+                        leg_type = st.selectbox("סוג", ["Call", "Put"],
+                                                index=0 if leg["type"] == "Call" else 1,
+                                                key=f"sb_lt_{idx}",
+                                                label_visibility="collapsed" if idx > 0 else "visible")
+                    with cols[1]:
+                        leg_action = st.selectbox("פעולה", ["BUY", "SELL"],
+                                                  index=0 if leg["action"] == "BUY" else 1,
+                                                  key=f"sb_la_{idx}",
+                                                  label_visibility="collapsed" if idx > 0 else "visible")
+                    with cols[2]:
+                        leg_strike = st.number_input("Strike", min_value=0.0, max_value=5000.0,
+                                                     value=float(leg["strike"]), step=10.0,
+                                                     key=f"sb_ls_{idx}",
+                                                     label_visibility="collapsed" if idx > 0 else "visible")
+                    with cols[3]:
+                        leg_prem = st.number_input("Premium (pts)", min_value=0.0, max_value=500.0,
+                                                   value=float(leg["premium_pts"]), step=0.5,
+                                                   key=f"sb_lp_{idx}",
+                                                   label_visibility="collapsed" if idx > 0 else "visible")
+                    with cols[4]:
+                        leg_qty = st.number_input("Qty", min_value=1, max_value=50,
+                                                  value=int(leg.get("qty", 1)), step=1,
+                                                  key=f"sb_lq_{idx}",
+                                                  label_visibility="collapsed" if idx > 0 else "visible")
+                    with cols[5]:
+                        if idx > 0:
+                            st.write("")
+                        if st.button("🗑️", key=f"sb_del_{idx}", help="הסר"):
+                            continue
+                    updated_legs.append({"type": leg_type, "action": leg_action,
+                                         "strike": leg_strike, "premium_pts": leg_prem, "qty": leg_qty})
+                if len(updated_legs) != len(legs):
+                    st.session_state.sandbox_legs = updated_legs
+                    st.rerun()
+                else:
+                    st.session_state.sandbox_legs = updated_legs
+                    legs = updated_legs
+
+            add_col, _, _ = st.columns([1, 1, 3])
+            with add_col:
+                if st.button("➕ הוסף רגל", use_container_width=True, key="sb_add_leg"):
+                    st.session_state.sandbox_legs.append(
+                        {"type": "Call", "action": "BUY",
+                         "strike": round(base / 10) * 10, "premium_pts": 0.0, "qty": 1})
+                    st.rerun()
+
+    # ================================================================
+    # § TAB 2 — Interactive Option Chain
+    # ================================================================
+    with _tab2:
+        render_section_header("⛓️ שרשרת אופציות — Option Chain")
+
+        expiry_dates = get_available_expiries()
+
+        if not expiry_dates:
+            st.markdown(
+                f'<div class="empty-state">'
+                f'<div class="es-icon">📊</div>'
+                f'<div class="es-title">אין נתוני אופציות זמינים</div>'
+                f'<div class="es-sub">המערכת תטען נתונים בזמן המסחר</div>'
+                f'</div>', unsafe_allow_html=True)
+        else:
+            chain_header = st.columns([2, 1, 1])
         with chain_header[1]:
             sel_expiry = st.selectbox("📅 פקיעה", expiry_dates, index=0,
                                       key="sb_chain_expiry")
@@ -2497,169 +2498,159 @@ elif nav_page == "🕹️ Demo Trading":
                     st.rerun()
 
     # ================================================================
-    # § BOTTOM MODULE — Demo Portfolio & Real-Time P&L
+    # § TAB 3 — Demo Portfolio & Real-Time P&L
     # ================================================================
-    st.markdown('<div class="section-hdr">💼 תיק דמו — פוזיציות ו-P&L</div>',
+    with _tab3:
+        render_section_header("💼 תיק דמו — פוזיציות ו-P&L")
+
+        current_balance = get_demo_balance()
+        open_trades = load_demo_trades("open")
+        closed_trades = load_demo_trades("closed")
+
+        total_unrealized = 0.0
+        if open_trades and live_index > 0:
+            for t in open_trades:
+                total_unrealized += sandbox_trade_pnl(t, live_index)
+
+        bal_color = "green" if current_balance >= DEMO_INITIAL_BALANCE else "red"
+        unr_color = "green" if total_unrealized >= 0 else "red"
+        unr_glow = "glow-green" if total_unrealized >= 0 else "glow-red"
+
+        render_metric_row(
+            _card("יתרת חשבון", f"{current_balance:,.0f} ₪", bal_color),
+            _card("P&L לא ממומש", fmt_ils(total_unrealized), unr_color, unr_glow),
+            _card("פתוחות", str(len(open_trades)), "blue"),
+            _card("סגורות", str(len(closed_trades)), "white"),
+        )
+
+        # ── Open positions ──
+        if open_trades:
+            for t in open_trades:
+                t_id = t.get("trade_id", "?")
+                t_name = t.get("strategy_name", "Custom")
+                t_expiry = t.get("expiry_date", "")
+                t_entry = float(t.get("entry_index", 0))
+                t_legs = t.get("legs", [])
+                if isinstance(t_legs, str):
+                    t_legs = json.loads(t_legs)
+                t_max_profit = float(t.get("max_profit_ils", 0))
+                t_pnl = sandbox_trade_pnl(t, live_index) if live_index > 0 else 0.0
+                pnl_color = "green" if t_pnl >= 0 else "red"
+                pnl_glow = "glow-green" if t_pnl >= 0 else "glow-red"
+
+                st.markdown(
+                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
+                    f'padding:16px 20px;margin:10px 0;">'
+                    f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">'
+                    f'<div><span style="color:{C_TEXT};font-weight:700;font-size:15px;">{t_name}</span>'
+                    f'<span style="color:{C_DIM};font-size:12px;margin-left:10px;">#{t_id}</span></div>'
+                    f'<div style="display:flex;gap:20px;align-items:center;">'
+                    f'<span style="color:{C_DIM};font-size:12px;">פקיעה: <strong style="color:{C_TEXT};">{t_expiry}</strong></span>'
+                    f'<span style="color:{C_DIM};font-size:12px;">כניסה: <strong style="color:{C_YELLOW};">{t_entry:,.0f}</strong></span>'
+                    f'</div></div></div>', unsafe_allow_html=True)
+
+                # Per-leg P&L table
+                leg_html = ('<div class="table-scroll"><table><thead><tr>'
+                            '<th>Leg</th><th>Action</th><th>Strike</th>'
+                            '<th>Entry (₪)</th><th>Unrealized P&L</th>'
+                            '</tr></thead><tbody>')
+                for leg in t_legs:
+                    l_type = leg.get("type", "")
+                    l_action = leg.get("action", "")
+                    l_strike = float(leg.get("strike", 0))
+                    l_prem = float(leg.get("premium_pts", 0))
+                    l_qty = int(leg.get("qty", 1))
+                    l_sign = 1 if l_action == "BUY" else -1
+                    if live_index > 0:
+                        intrinsic = (max(live_index - l_strike, 0) if l_type == "Call"
+                                     else max(l_strike - live_index, 0))
+                        leg_pnl = l_sign * (intrinsic - l_prem) * MULTIPLIER * l_qty
+                    else:
+                        leg_pnl = 0.0
+                    css = "sell" if l_action == "SELL" else "buy"
+                    pnl_css = "buy" if leg_pnl >= 0 else "sell"
+                    leg_html += (f'<tr><td>{l_type}</td><td class="{css}">{l_action}</td>'
+                                 f'<td><strong>{l_strike:,.0f}</strong></td>'
+                                 f'<td>{l_prem * MULTIPLIER:,.0f}</td>'
+                                 f'<td class="{pnl_css}"><strong>{fmt_ils(leg_pnl)}</strong></td></tr>')
+                leg_html += '</tbody></table></div>'
+                st.markdown(leg_html, unsafe_allow_html=True)
+
+                pnl_cols = st.columns([2, 1])
+                with pnl_cols[0]:
+                    render_metric_row(
+                        _card("P&L לא ממומש", fmt_ils(t_pnl), pnl_color, pnl_glow),
+                        _card("Max Profit", fmt_ils(t_max_profit), "blue"),
+                    )
+                with pnl_cols[1]:
+                    if st.button(f"🔒 סגור #{t_id}", key=f"sb_close_{t_id}",
+                                 use_container_width=True):
+                        s_idx = live_index if live_index > 0 else t_entry
+                        f_pnl = sandbox_trade_pnl(t, s_idx)
+                        close_demo_trade(t_id, s_idx, f_pnl, "manual_close")
+                        _update_demo_balance(current_balance + f_pnl, f_pnl, f"close_{t_id}")
+                        st.cache_data.clear()
+                        st.rerun()
+                st.markdown("---")
+        else:
+            st.markdown(
+                '<div class="empty-state">'
+                '<div class="es-icon">💼</div>'
+                '<div class="es-title">אין פוזיציות פתוחות</div>'
+                '<div class="es-sub">בנה אסטרטגיה בטאב הראשון ושגר לתיק הדמו</div>'
+                '</div>',
                 unsafe_allow_html=True)
 
-    current_balance = get_demo_balance()
-    open_trades = load_demo_trades("open")
-    closed_trades = load_demo_trades("closed")
-
-    total_unrealized = 0.0
-    if open_trades and live_index > 0:
-        for t in open_trades:
-            total_unrealized += sandbox_trade_pnl(t, live_index)
-
-    bal_color = "green" if current_balance >= DEMO_INITIAL_BALANCE else "red"
-    unr_color = "green" if total_unrealized >= 0 else "red"
-    unr_glow = "glow-green" if total_unrealized >= 0 else "glow-red"
-
-    st.markdown(
-        f'<div class="metric-grid">'
-        f'<div class="metric-card"><div class="label">יתרת חשבון</div>'
-        f'<div class="value {bal_color}">{current_balance:,.0f} ₪</div></div>'
-        f'<div class="metric-card {unr_glow}"><div class="label">P&L לא ממומש</div>'
-        f'<div class="value {unr_color}">{fmt_ils(total_unrealized)}</div></div>'
-        f'<div class="metric-card"><div class="label">פתוחות</div>'
-        f'<div class="value blue">{len(open_trades)}</div></div>'
-        f'<div class="metric-card"><div class="label">סגורות</div>'
-        f'<div class="value white">{len(closed_trades)}</div></div>'
-        f'</div>', unsafe_allow_html=True)
-
-    # ── Open positions ──
-    if open_trades:
-        for t in open_trades:
-            t_id = t.get("trade_id", "?")
-            t_name = t.get("strategy_name", "Custom")
-            t_expiry = t.get("expiry_date", "")
-            t_entry = float(t.get("entry_index", 0))
-            t_legs = t.get("legs", [])
-            if isinstance(t_legs, str):
-                t_legs = json.loads(t_legs)
-            t_max_profit = float(t.get("max_profit_ils", 0))
-            t_pnl = sandbox_trade_pnl(t, live_index) if live_index > 0 else 0.0
-            pnl_color = "green" if t_pnl >= 0 else "red"
-            pnl_glow = "glow-green" if t_pnl >= 0 else "glow-red"
-
+        # ── Closed trades ──
+        if closed_trades:
+            render_section_header("📜 היסטוריית עסקאות")
+            closed_html = ('<div class="table-scroll"><table><thead><tr>'
+                           '<th>ID</th><th>Strategy</th><th>Expiry</th>'
+                           '<th>Entry</th><th>Settlement</th><th>P&L</th><th>סיבה</th>'
+                           '</tr></thead><tbody>')
+            total_realized = 0.0
+            for ct in closed_trades:
+                ct_pnl = float(ct.get("pnl_ils", 0))
+                total_realized += ct_pnl
+                pnl_css = "buy" if ct_pnl >= 0 else "sell"
+                reason_lbl = "פקיעה" if "expiry" in ct.get("close_reason", "") else "ידני"
+                closed_html += (
+                    f'<tr><td>{ct.get("trade_id","?")}</td>'
+                    f'<td>{ct.get("strategy_name","")}</td>'
+                    f'<td>{ct.get("expiry_date","")}</td>'
+                    f'<td>{float(ct.get("entry_index",0)):,.0f}</td>'
+                    f'<td>{float(ct.get("settlement_index",0)):,.0f}</td>'
+                    f'<td class="{pnl_css}"><strong>{fmt_ils(ct_pnl)}</strong></td>'
+                    f'<td>{reason_lbl}</td></tr>')
+            closed_html += '</tbody></table></div>'
+            st.markdown(closed_html, unsafe_allow_html=True)
+            real_c = "#00E676" if total_realized >= 0 else "#FF1744"
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
-                f'padding:16px 20px;margin:10px 0;">'
-                f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">'
-                f'<div><span style="color:{C_TEXT};font-weight:700;font-size:15px;">{t_name}</span>'
-                f'<span style="color:{C_DIM};font-size:12px;margin-left:10px;">#{t_id}</span></div>'
-                f'<div style="display:flex;gap:20px;align-items:center;">'
-                f'<span style="color:{C_DIM};font-size:12px;">פקיעה: <strong style="color:{C_TEXT};">{t_expiry}</strong></span>'
-                f'<span style="color:{C_DIM};font-size:12px;">כניסה: <strong style="color:{C_YELLOW};">{t_entry:,.0f}</strong></span>'
-                f'</div></div></div>', unsafe_allow_html=True)
+                f'<div style="text-align:center;padding:10px;color:{C_DIM};font-size:13px;">'
+                f'סה"כ ממומש: <strong style="color:{real_c};">{fmt_ils(total_realized)}</strong></div>',
+                unsafe_allow_html=True)
 
-            # Per-leg P&L table
-            leg_html = ('<div class="table-scroll"><table><thead><tr>'
-                        '<th>Leg</th><th>Action</th><th>Strike</th>'
-                        '<th>Entry (₪)</th><th>Unrealized P&L</th>'
-                        '</tr></thead><tbody>')
-            for leg in t_legs:
-                l_type = leg.get("type", "")
-                l_action = leg.get("action", "")
-                l_strike = float(leg.get("strike", 0))
-                l_prem = float(leg.get("premium_pts", 0))
-                l_qty = int(leg.get("qty", 1))
-                l_sign = 1 if l_action == "BUY" else -1
-                if live_index > 0:
-                    intrinsic = (max(live_index - l_strike, 0) if l_type == "Call"
-                                 else max(l_strike - live_index, 0))
-                    leg_pnl = l_sign * (intrinsic - l_prem) * MULTIPLIER * l_qty
-                else:
-                    leg_pnl = 0.0
-                css = "sell" if l_action == "SELL" else "buy"
-                pnl_css = "buy" if leg_pnl >= 0 else "sell"
-                leg_html += (f'<tr><td>{l_type}</td><td class="{css}">{l_action}</td>'
-                             f'<td><strong>{l_strike:,.0f}</strong></td>'
-                             f'<td>{l_prem * MULTIPLIER:,.0f}</td>'
-                             f'<td class="{pnl_css}"><strong>{fmt_ils(leg_pnl)}</strong></td></tr>')
-            leg_html += '</tbody></table></div>'
-            st.markdown(leg_html, unsafe_allow_html=True)
+            import csv
+            import io
+            csv_buf = io.StringIO(newline='')
+            fieldnames = ["trade_id", "strategy_name", "expiry_date", "entry_index",
+                          "settlement_index", "pnl_ils", "close_reason", "legs", "closed_at"]
+            writer = csv.DictWriter(csv_buf, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for ct in closed_trades:
+                row_out = {k: ct.get(k, "") for k in fieldnames}
+                if isinstance(row_out.get("legs"), (list, dict)):
+                    row_out["legs"] = json.dumps(row_out["legs"], ensure_ascii=False)
+                writer.writerow(row_out)
 
-            pnl_cols = st.columns([2, 1])
-            with pnl_cols[0]:
-                st.markdown(
-                    f'<div class="metric-grid">'
-                    f'<div class="metric-card {pnl_glow}"><div class="label">P&L לא ממומש</div>'
-                    f'<div class="value {pnl_color}">{fmt_ils(t_pnl)}</div></div>'
-                    f'<div class="metric-card"><div class="label">Max Profit</div>'
-                    f'<div class="value blue">{fmt_ils(t_max_profit)}</div></div>'
-                    f'</div>', unsafe_allow_html=True)
-            with pnl_cols[1]:
-                if st.button(f"🔒 סגור #{t_id}", key=f"sb_close_{t_id}", use_container_width=True):
-                    s_idx = live_index if live_index > 0 else t_entry
-                    f_pnl = sandbox_trade_pnl(t, s_idx)
-                    close_demo_trade(t_id, s_idx, f_pnl, "manual_close")
-                    _update_demo_balance(current_balance + f_pnl, f_pnl, f"close_{t_id}")
-                    st.cache_data.clear()
-                    st.rerun()
-            st.markdown("---")
-    else:
-        st.markdown(
-            '<div class="empty-state">'
-            '<div class="es-icon">💼</div>'
-            '<div class="es-title">אין פוזיציות פתוחות</div>'
-            '<div class="es-sub">בנה אסטרטגיה למעלה ושגר לתיק הדמו</div>'
-            '</div>',
-            unsafe_allow_html=True)
-
-    # ── Closed trades ──
-    if closed_trades:
-        st.markdown('<div class="section-hdr">📜 היסטוריית עסקאות</div>',
-                    unsafe_allow_html=True)
-        closed_html = ('<div class="table-scroll"><table><thead><tr>'
-                       '<th>ID</th><th>Strategy</th><th>Expiry</th>'
-                       '<th>Entry</th><th>Settlement</th><th>P&L</th><th>סיבה</th>'
-                       '</tr></thead><tbody>')
-        total_realized = 0.0
-        for ct in closed_trades:
-            ct_pnl = float(ct.get("pnl_ils", 0))
-            total_realized += ct_pnl
-            pnl_css = "buy" if ct_pnl >= 0 else "sell"
-            reason_lbl = "פקיעה" if "expiry" in ct.get("close_reason", "") else "ידני"
-            closed_html += (
-                f'<tr><td>{ct.get("trade_id","?")}</td>'
-                f'<td>{ct.get("strategy_name","")}</td>'
-                f'<td>{ct.get("expiry_date","")}</td>'
-                f'<td>{float(ct.get("entry_index",0)):,.0f}</td>'
-                f'<td>{float(ct.get("settlement_index",0)):,.0f}</td>'
-                f'<td class="{pnl_css}"><strong>{fmt_ils(ct_pnl)}</strong></td>'
-                f'<td>{reason_lbl}</td></tr>')
-        closed_html += '</tbody></table></div>'
-        st.markdown(closed_html, unsafe_allow_html=True)
-        real_c = "#00E676" if total_realized >= 0 else "#FF1744"
-        st.markdown(
-            f'<div style="text-align:center;padding:10px;color:{C_DIM};font-size:13px;">'
-            f'סה"כ ממומש: <strong style="color:{real_c};">{fmt_ils(total_realized)}</strong></div>',
-            unsafe_allow_html=True)
-
-        # ── CSV Export for knowledge preservation ──
-        import csv
-        import io
-        # newline='' prevents double-newlines on Windows (\r\r\n -> \r\n)
-        csv_buf = io.StringIO(newline='')
-        fieldnames = ["trade_id", "strategy_name", "expiry_date", "entry_index",
-                      "settlement_index", "pnl_ils", "close_reason", "legs", "closed_at"]
-        writer = csv.DictWriter(csv_buf, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for ct in closed_trades:
-            row_out = {k: ct.get(k, "") for k in fieldnames}
-            if isinstance(row_out.get("legs"), (list, dict)):
-                row_out["legs"] = json.dumps(row_out["legs"], ensure_ascii=False)
-            writer.writerow(row_out)
-
-        st.download_button(
-            label="📥 ייצוא היסטוריה ל-CSV",
-            data=csv_buf.getvalue(),
-            file_name=f"demo_trades_{now_il.strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-            key="sb_export_csv",
-            use_container_width=True,
-        )
+            st.download_button(
+                label="📥 ייצוא היסטוריה ל-CSV",
+                data=csv_buf.getvalue(),
+                file_name=f"demo_trades_{now_il.strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                key="sb_export_csv",
+                use_container_width=True,
+            )
 
 
 # ╔════════════════════════════════════════════════════════════════════╗
