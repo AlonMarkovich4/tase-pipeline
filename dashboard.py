@@ -1213,6 +1213,34 @@ def sandbox_trade_pnl(trade: dict, current_index: float) -> float:
 
 
 # ==================================================================
+# SHARED RENDER HELPERS — used across all pages
+# ==================================================================
+
+def _card(label: str, value: str, color: str = "white", glow: str = "") -> str:
+    """Return a metric-card HTML snippet (embed inside metric-grid div)."""
+    glow_cls = f" {glow}" if glow else ""
+    return (
+        f'<div class="metric-card{glow_cls}">'
+        f'<div class="label">{label}</div>'
+        f'<div class="value {color}">{value}</div>'
+        f'</div>'
+    )
+
+
+def render_metric_row(*cards: str) -> None:
+    """Render a horizontal row of metric cards from _card() snippets."""
+    st.markdown(
+        f'<div class="metric-grid">{"".join(cards)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_header(text: str) -> None:
+    """Render a styled section divider with title."""
+    st.markdown(f'<div class="section-hdr">{text}</div>', unsafe_allow_html=True)
+
+
+# ==================================================================
 # RENDER COMPONENTS — Strategy Desk
 # ==================================================================
 
@@ -1598,8 +1626,9 @@ with st.sidebar:
 
     nav_page = st.radio(
         "ניווט",
-        ["🏠 Home", "🕹️ Demo Trading", "🔵 Open Positions", "📜 History"],
+        ["📈 ביצועים", "🏠 Home", "🕹️ Demo Trading", "🔵 Open Positions", "📜 History"],
         captions=[
+            "ביצועים כוללים",
             "מה לעשות עכשיו",
             "זירת מסחר דמו",
             f"{n_global_active} פוזיציות פתוחות",
@@ -1618,9 +1647,165 @@ with st.sidebar:
 
 
 # ╔════════════════════════════════════════════════════════════════════╗
+# ║  PAGE: 📈 ביצועים — Performance Dashboard                          ║
+# ╚════════════════════════════════════════════════════════════════════╝
+if nav_page == "📈 ביצועים":
+    render_section_header("📈 ביצועים כוללים — כל הזמנים")
+
+    settled_all = (
+        df[df["_is_settled"] & (df["actual_index_close"] > 0)].copy()
+        if has_strategies else pd.DataFrame()
+    )
+
+    if settled_all.empty:
+        st.markdown(
+            f'<div class="empty-state">'
+            f'<div class="es-icon">📈</div>'
+            f'<div class="es-title">אין נתוני ביצועים עדיין</div>'
+            f'<div class="es-sub">הנתונים יופיעו לאחר סילוק האסטרטגיות הראשונות</div>'
+            f'</div>', unsafe_allow_html=True)
+    else:
+        # ── KPI row ──────────────────────────────────────────────────
+        total_pnl = float(settled_all["actual_pnl_ils"].sum())
+        n_trades  = len(settled_all)
+        n_wins    = int((settled_all["actual_pnl_ils"] > 0).sum())
+        win_rate  = n_wins / n_trades * 100 if n_trades else 0
+        mask_pos  = settled_all["max_profit_ils"] > 0
+        avg_util  = float(
+            (settled_all.loc[mask_pos, "actual_pnl_ils"]
+             / settled_all.loc[mask_pos, "max_profit_ils"]).mean() * 100
+        ) if mask_pos.any() else 0.0
+        n_weeks   = (settled_all["_iso_week"].nunique()
+                     if "_iso_week" in settled_all.columns else 0)
+
+        pnl_color = "green" if total_pnl >= 0 else "red"
+        pnl_glow  = "glow-green" if total_pnl >= 0 else "glow-red"
+        wr_color  = "green" if win_rate >= 60 else ("yellow" if win_rate >= 40 else "red")
+
+        render_metric_row(
+            _card("P&L מצטבר", fmt_ils(total_pnl), pnl_color, pnl_glow),
+            _card("Win Rate", f"{win_rate:.0f}%", wr_color),
+            _card("ניצול ממוצע", f"{avg_util:.0f}%", "blue"),
+            _card("שבועות פעילים", str(n_weeks), "white"),
+        )
+
+        # ── Equity curve ─────────────────────────────────────────────
+        render_section_header("📊 עקומת הון (P&L מצטבר לפי תאריך פקיעה)")
+        equity = (
+            settled_all
+            .sort_values("expiry_date")
+            .groupby("expiry_date", as_index=False)["actual_pnl_ils"]
+            .sum()
+        )
+        equity["cumulative"] = equity["actual_pnl_ils"].cumsum()
+        _final = equity["cumulative"].iloc[-1]
+        _line_c = C_GREEN if _final >= 0 else C_RED
+        _fill_c = "rgba(0,230,118,0.12)" if _final >= 0 else "rgba(255,23,68,0.10)"
+
+        fig_eq = go.Figure()
+        fig_eq.add_trace(go.Scatter(
+            x=equity["expiry_date"], y=equity["cumulative"],
+            fill="tozeroy", fillcolor=_fill_c,
+            line=dict(color=_line_c, width=2),
+            mode="lines+markers",
+            marker=dict(size=6, color=_line_c, line=dict(color=C_BG, width=1)),
+            hovertemplate="פקיעה: %{x}<br>P&L מצטבר: %{y:+,.0f} ₪<extra></extra>",
+        ))
+        fig_eq.add_hline(y=0, line=dict(color="rgba(255,255,255,0.15)", width=1))
+        fig_eq.update_layout(
+            template="plotly_dark", paper_bgcolor=C_BG, plot_bgcolor=C_BG,
+            height=320, margin=dict(l=60, r=20, t=20, b=50),
+            xaxis=dict(gridcolor="rgba(255,255,255,0.04)",
+                       tickfont=dict(size=10, color=C_DIM), tickangle=-30),
+            yaxis=dict(title="P&L (₪)", gridcolor="rgba(255,255,255,0.06)",
+                       tickformat="+,", tickfont=dict(size=10, color=C_DIM),
+                       title_font=dict(size=11, color=C_DIM)),
+            showlegend=False,
+        )
+        st.plotly_chart(fig_eq, use_container_width=True)
+
+        # ── Result status distribution ────────────────────────────────
+        render_section_header("🎯 התפלגות תוצאות")
+        if "result_status" in settled_all.columns:
+            _status_counts = settled_all["result_status"].fillna("unknown").value_counts()
+            _STATUS_LABELS = {
+                "max_profit": "מקסימום רווח",
+                "partial":    "רווח חלקי",
+                "max_loss":   "הפסד מקסימלי",
+                "zero":       "אפס",
+            }
+            _STATUS_COLORS = {
+                "max_profit": C_GREEN, "partial": C_BLUE,
+                "max_loss":   C_RED,   "zero":    C_DIM,
+            }
+            _labels = [_STATUS_LABELS.get(s, s) for s in _status_counts.index]
+            _colors = [_STATUS_COLORS.get(s, C_DIM) for s in _status_counts.index]
+            fig_dist = go.Figure(go.Bar(
+                x=_labels, y=_status_counts.values,
+                marker_color=_colors,
+                text=_status_counts.values,
+                textposition="outside",
+                textfont=dict(color=C_TEXT, size=13),
+                hovertemplate="%{x}: %{y} עסקאות<extra></extra>",
+            ))
+            fig_dist.update_layout(
+                template="plotly_dark", paper_bgcolor=C_BG, plot_bgcolor=C_BG,
+                height=260, margin=dict(l=40, r=20, t=30, b=40),
+                xaxis=dict(gridcolor="rgba(255,255,255,0.04)",
+                           tickfont=dict(size=12, color=C_TEXT)),
+                yaxis=dict(gridcolor="rgba(255,255,255,0.06)",
+                           tickfont=dict(size=10, color=C_DIM)),
+                showlegend=False,
+            )
+            st.plotly_chart(fig_dist, use_container_width=True)
+
+        # ── Settled trades table (st.dataframe — sortable + exportable) ──
+        render_section_header("📋 כל העסקאות שפקעו")
+        _tbl = settled_all.copy()
+        _tbl["ניצול %"] = np.where(
+            _tbl["max_profit_ils"] > 0,
+            (_tbl["actual_pnl_ils"] / _tbl["max_profit_ils"] * 100).round(1),
+            0.0,
+        )
+        _cols_want = [
+            "expiry_date", "interval_pct", "base_index_value",
+            "actual_index_close", "result_status", "actual_pnl_ils", "ניצול %",
+        ]
+        _col_labels = {
+            "expiry_date":        "תאריך פקיעה",
+            "interval_pct":       "מרווח %",
+            "base_index_value":   "מדד כניסה",
+            "actual_index_close": "מדד סטלמנט",
+            "result_status":      "תוצאה",
+            "actual_pnl_ils":     "P&L (₪)",
+            "ניצול %":            "ניצול %",
+        }
+        _tbl_display = (
+            _tbl[[c for c in _cols_want if c in _tbl.columns]]
+            .rename(columns=_col_labels)
+            .sort_values("תאריך פקיעה", ascending=False)
+        )
+        st.dataframe(
+            _tbl_display,
+            use_container_width=True,
+            column_config={
+                "תאריך פקיעה":   st.column_config.TextColumn(),
+                "מרווח %":       st.column_config.NumberColumn(format="%.1f%%"),
+                "מדד כניסה":     st.column_config.NumberColumn(format="%.0f"),
+                "מדד סטלמנט":    st.column_config.NumberColumn(format="%.0f"),
+                "תוצאה":         st.column_config.TextColumn(),
+                "P&L (₪)":       st.column_config.NumberColumn(format="%+,.0f ₪"),
+                "ניצול %":       st.column_config.ProgressColumn(
+                                     min_value=-100, max_value=100, format="%.0f%%"),
+            },
+            hide_index=True,
+        )
+
+
+# ╔════════════════════════════════════════════════════════════════════╗
 # ║  PAGE: 🏠 HOME — Decision Command Center                            ║
 # ╚════════════════════════════════════════════════════════════════════╝
-if nav_page == "🏠 Home":
+elif nav_page == "🏠 Home":
     preferred = get_preferred_intervals()
 
     # ─────────────────────────────────────────────────────────────
