@@ -1210,28 +1210,19 @@ def render_expiry_metrics(row):
             "and is not tradeable."
         )
 
-    st.markdown(
-        f'<div class="metric-grid">'
-        f'<div class="metric-card"><div class="label">Net Premium (pts)</div><div class="value {prem_color}">{fmt_num(net_prem)}</div></div>'
-        f'<div class="metric-card glow-green"><div class="label">Max Profit</div><div class="value green">{fmt_ils(max_profit)}</div></div>'
-        f'<div class="metric-card glow-red"><div class="label">Max Risk</div><div class="value red">{fmt_ils(-abs(max_risk))}</div></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-    # Display RR — if max_risk is 0 (capped to wing), show "1:0 (zero-risk)"
     if abs(max_risk) < 0.01 and max_profit > 0:
         rr_display = "1:0 (capped)"
     else:
         rr_display = f"1:{fmt_num(rr, 1)}"
 
-    st.markdown(
-        f'<div class="metric-grid">'
-        f'<div class="metric-card"><div class="label">Risk / Reward</div><div class="value white">{rr_display}</div></div>'
-        f'<div class="metric-card"><div class="label">Lower Breakeven</div><div class="value white">{fmt_num(be_lower, 0)}</div></div>'
-        f'<div class="metric-card"><div class="label">Upper Breakeven</div><div class="value white">{fmt_num(be_upper, 0)}</div></div>'
-        f'<div class="metric-card"><div class="label">DTE</div><div class="value blue">{dte}</div></div>'
-        f'</div>',
-        unsafe_allow_html=True,
+    render_metric_row(
+        _card("Net Premium (pts)", fmt_num(net_prem), "pos" if net_prem > 0 else "neg"),
+        _card("Max Profit",        fmt_ils(max_profit), "pos"),
+        _card("Max Risk",          fmt_ils(-abs(max_risk)), "neg"),
+        _card("Risk / Reward",     rr_display, "primary"),
+        _card("BE Lower",          fmt_num(be_lower, 0), "primary"),
+        _card("BE Upper",          fmt_num(be_upper, 0), "primary"),
+        _card("DTE",               str(dte), "accent"),
     )
 
 
@@ -1559,7 +1550,7 @@ if nav_page == "📈 ביצועים":
                      if "_iso_week" in settled_all.columns else 0)
 
         pnl_color = "green" if total_pnl >= 0 else "red"
-        pnl_glow  = "glow-green" if total_pnl >= 0 else "glow-red"
+        pnl_glow  = ""
         wr_color  = "green" if win_rate >= 60 else ("yellow" if win_rate >= 40 else "red")
 
         render_metric_row(
@@ -1743,28 +1734,43 @@ elif nav_page == "🏠 Home":
                            (item["score"] - item["win"] * 60) / 40 * 100))
             st.markdown(
                 f'<div class="rec-card{top_cls}">'
+                # ── header row ──
                 f'<div class="rec-header">'
-                f'<div><span style="font-size:18px;">{medal}</span> '
-                f'<span style="color:{C_TEXT};font-weight:800;font-size:16px;">{pct:.1f}%</span>'
-                f'<span style="color:{C_DIM};font-size:12px;margin-right:8px;"> {sp:,.0f}—{sc:,.0f}</span>{pref_tag}</div>'
+                f'<div style="display:flex;align-items:baseline;gap:8px;">'
+                f'<span style="font-size:16px;line-height:1;">{medal}</span>'
+                f'<span style="color:{T_TEXT1};font-weight:600;font-size:18px;'
+                f'font-variant-numeric:tabular-nums;">{pct:.1f}%</span>'
+                f'<span style="color:{T_TEXT3};font-size:12px;">{sp:,.0f} — {sc:,.0f}</span>'
+                f'{pref_tag}</div>'
+                # ── stats chips ──
                 f'<div class="rec-stats">'
-                f'<span>ציון <strong style="color:{C_BLUE};font-size:15px;">{item["score"]}</strong>/100</span>'
-                f'<span>פרמיה <strong style="color:{C_TEXT};">{prem:,.1f}</strong></span>'
-                f'<span style="color:{C_GREEN};">+{mprofit:,.0f}₪</span>'
-                f'<span style="color:{C_RED};">-{mrisk:,.0f}₪</span>'
+                f'<span style="color:{T_TEXT1};font-size:13px;font-weight:500;'
+                f'font-variant-numeric:tabular-nums;">{item["score"]}<span style="color:{T_TEXT3};'
+                f'font-weight:400;font-size:11px;">/100</span></span>'
+                f'<span style="font-variant-numeric:tabular-nums;">{prem:,.1f} pts</span>'
+                f'<span style="color:{T_POS};font-variant-numeric:tabular-nums;">+{mprofit:,.0f} ₪</span>'
+                f'<span style="color:{T_NEG};font-variant-numeric:tabular-nums;">−{mrisk:,.0f} ₪</span>'
                 f'</div></div>'
-                f'<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06);direction:ltr;">'
+                # ── score breakdown bars ──
+                f'<div style="margin-top:10px;padding-top:10px;'
+                f'border-top:1px solid var(--border);direction:ltr;">'
                 f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;">'
-                f'<span style="color:{C_DIM};font-size:10px;min-width:90px;">סיכוי הצלחה (60%)</span>'
-                f'<div style="flex:1;height:5px;background:rgba(255,255,255,0.07);border-radius:3px;">'
-                f'<div style="width:{_win_bar:.0f}%;height:100%;background:{C_GREEN};border-radius:3px;"></div></div>'
-                f'<span style="color:{C_GREEN};font-size:10px;min-width:30px;text-align:right;">{_win_bar:.0f}%</span>'
+                f'<span style="color:{T_TEXT3};font-size:11px;min-width:112px;">'
+                f'סיכוי הצלחה (60%)</span>'
+                f'<div style="flex:1;height:3px;background:var(--border);border-radius:2px;">'
+                f'<div style="width:{_win_bar:.0f}%;height:100%;background:{T_POS};'
+                f'border-radius:2px;"></div></div>'
+                f'<span style="color:{T_POS};font-size:11px;min-width:32px;text-align:right;'
+                f'font-variant-numeric:tabular-nums;">{_win_bar:.0f}%</span>'
                 f'</div>'
                 f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;">'
-                f'<span style="color:{C_DIM};font-size:10px;min-width:90px;">תשואה יחסית (40%)</span>'
-                f'<div style="flex:1;height:5px;background:rgba(255,255,255,0.07);border-radius:3px;">'
-                f'<div style="width:{_rew_bar:.0f}%;height:100%;background:{C_BLUE};border-radius:3px;"></div></div>'
-                f'<span style="color:{C_BLUE};font-size:10px;min-width:30px;text-align:right;">{_rew_bar:.0f}%</span>'
+                f'<span style="color:{T_TEXT3};font-size:11px;min-width:112px;">'
+                f'תשואה יחסית (40%)</span>'
+                f'<div style="flex:1;height:3px;background:var(--border);border-radius:2px;">'
+                f'<div style="width:{_rew_bar:.0f}%;height:100%;background:{T_ACCENT};'
+                f'border-radius:2px;"></div></div>'
+                f'<span style="color:{T_ACCENT};font-size:11px;min-width:32px;text-align:right;'
+                f'font-variant-numeric:tabular-nums;">{_rew_bar:.0f}%</span>'
                 f'</div>'
                 f'</div>'
                 f'</div>', unsafe_allow_html=True)
@@ -1973,9 +1979,9 @@ elif nav_page == "🕹️ Demo Trading":
                 f'<div class="metric-grid">'
                 f'<div class="metric-card"><div class="label">Net Premium (pts)</div>'
                 f'<div class="value {prem_color}">{fmt_num(net_prem)}</div></div>'
-                f'<div class="metric-card glow-green"><div class="label">Max Profit</div>'
+                f'<div class="metric-card"><div class="label">Max Profit</div>'
                 f'<div class="value green">{fmt_ils(max_profit)}</div></div>'
-                f'<div class="metric-card glow-red"><div class="label">Max Loss</div>'
+                f'<div class="metric-card"><div class="label">Max Loss</div>'
                 f'<div class="value red">{fmt_ils(max_loss)}</div></div>'
                 f'<div class="metric-card"><div class="label">Breakeven(s)</div>'
                 f'<div class="value white" style="font-size:18px;">{be_str}</div></div>'
@@ -2301,7 +2307,7 @@ elif nav_page == "🕹️ Demo Trading":
             chain_html += '</tbody></table></div>'
             st.markdown(chain_html, unsafe_allow_html=True)
 
-            # ── IV Proxy — ATM theoretical vs. market price ───────────
+            # ── IV Proxy — compact stat row below chain ──────────────
             if atm_strike > 0 and "baserate_call_pts" in chain_df.columns:
                 _atm_row = chain_df[chain_df["strike"] == atm_strike]
                 if not _atm_row.empty:
@@ -2313,27 +2319,23 @@ elif nav_page == "🕹️ Demo Trading":
                     if _bc_pts > 0 or _bp_pts > 0:
                         _iv_c = _lc_pts - _bc_pts
                         _iv_p = _lp_pts - _bp_pts
-                        _ivc_col = "green" if _iv_c > 0 else ("red" if _iv_c < 0 else "white")
-                        _ivp_col = "green" if _iv_p > 0 else ("red" if _iv_p < 0 else "white")
+                        _ivc_col = T_POS if _iv_c > 0 else (T_NEG if _iv_c < 0 else T_TEXT2)
+                        _ivp_col = T_POS if _iv_p > 0 else (T_NEG if _iv_p < 0 else T_TEXT2)
+                        _c_str = (f'<span style="color:{_ivc_col};font-variant-numeric:tabular-nums;">'
+                                  f'{_iv_c:+.2f} pts</span>' if _bc_pts > 0 else
+                                  f'<span style="color:{T_TEXT3};">N/A</span>')
+                        _p_str = (f'<span style="color:{_ivp_col};font-variant-numeric:tabular-nums;">'
+                                  f'{_iv_p:+.2f} pts</span>' if _bp_pts > 0 else
+                                  f'<span style="color:{T_TEXT3};">N/A</span>')
                         st.markdown(
-                            f'<div style="color:{C_DIM};font-size:11px;margin:8px 0 2px;'
-                            f'direction:ltr;text-align:left;">'
-                            f'IV Proxy @ ATM {atm_strike:,.0f} '
-                            f'<span style="color:{C_DIM};font-size:10px;">'
-                            f'(שוק − תיאורטי)</span></div>',
+                            f'<div style="display:flex;align-items:center;gap:16px;'
+                            f'padding:6px 0;font-size:12px;color:{T_TEXT2};direction:ltr;">'
+                            f'<span style="color:{T_TEXT3};">IV Proxy @ ATM {atm_strike:,.0f}</span>'
+                            f'<span>Call {_c_str}</span>'
+                            f'<span>Put {_p_str}</span>'
+                            f'<span style="color:{T_TEXT3};font-size:11px;">(שוק − תיאורטי)</span>'
+                            f'</div>',
                             unsafe_allow_html=True,
-                        )
-                        render_metric_row(
-                            _card(
-                                f"Call — שוק {_lc_pts:.2f} / תיאורטי {_bc_pts:.2f}",
-                                f"{_iv_c:+.2f} pts" if _bc_pts > 0 else "N/A",
-                                _ivc_col,
-                            ),
-                            _card(
-                                f"Put — שוק {_lp_pts:.2f} / תיאורטי {_bp_pts:.2f}",
-                                f"{_iv_p:+.2f} pts" if _bp_pts > 0 else "N/A",
-                                _ivp_col,
-                            ),
                         )
 
             # ── Add to Sandbox widget ──
@@ -2388,7 +2390,7 @@ elif nav_page == "🕹️ Demo Trading":
 
         bal_color = "green" if current_balance >= DEMO_INITIAL_BALANCE else "red"
         unr_color = "green" if total_unrealized >= 0 else "red"
-        unr_glow = "glow-green" if total_unrealized >= 0 else "glow-red"
+        unr_glow = ""
 
         render_metric_row(
             _card("יתרת חשבון", f"{current_balance:,.0f} ₪", bal_color),
@@ -2410,7 +2412,7 @@ elif nav_page == "🕹️ Demo Trading":
                 t_max_profit = float(t.get("max_profit_ils", 0))
                 t_pnl = sandbox_trade_pnl(t, live_index) if live_index > 0 else 0.0
                 pnl_color = "green" if t_pnl >= 0 else "red"
-                pnl_glow = "glow-green" if t_pnl >= 0 else "glow-red"
+                pnl_glow = ""
 
                 st.markdown(
                     f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
@@ -2613,8 +2615,7 @@ elif has_strategies:
             summary_html = '<div class="metric-grid">'
             for ip in interval_pnl_active:
                 u_color = "green" if ip["pnl"] >= 0 else "red"
-                glow = "glow-green" if ip["pnl"] >= 0 else "glow-red"
-                summary_html += f'<div class="metric-card {glow}"><div class="label">{ip["pct"]:.1f}% ({ip["n"]})</div><div class="value {u_color}">{fmt_ils(ip["pnl"])}</div></div>'
+                summary_html += f'<div class="metric-card"><div class="label">{ip["pct"]:.1f}% ({ip["n"]})</div><div class="value {u_color}">{fmt_ils(ip["pnl"])}</div></div>'
             summary_html += '</div>'
             st.markdown(summary_html, unsafe_allow_html=True)
 
@@ -2646,13 +2647,12 @@ elif has_strategies:
                 chg_pct = chg_val / base_index * 100 if base_index > 0 else 0
                 u_pnl, u_method = compute_unrealized_pnl(row, live_index)
                 unr_color = "green" if u_pnl >= 0 else "red"
-                glow = "green" if u_pnl >= 0 else "red"
                 method_label = "LIVE" if u_method == "live" else "PROXY"
                 st.markdown(
                     f'<div class="metric-grid">'
-                    f'<div class="metric-card glow-{("green" if live_index >= base_index else "red")}"><div class="label">Live Index</div><div class="value {idx_color}">{fmt_num(live_index)}</div></div>'
+                    f'<div class="metric-card"><div class="label">Live Index</div><div class="value {idx_color}">{fmt_num(live_index)}</div></div>'
                     f'<div class="metric-card"><div class="label">Change from Entry</div><div class="value {idx_color}">{fmt_num(chg_val)} ({chg_pct:+.2f}%)</div></div>'
-                    f'<div class="metric-card glow-{glow}"><div class="label">Unrealized P&L ({method_label})</div><div class="value {unr_color}">{fmt_ils(u_pnl)}</div></div>'
+                    f'<div class="metric-card"><div class="label">Unrealized P&L ({method_label})</div><div class="value {unr_color}">{fmt_ils(u_pnl)}</div></div>'
                     f'</div>', unsafe_allow_html=True)
 
             render_legs_table(row)
@@ -2783,28 +2783,30 @@ elif has_strategies:
             actual_pnl = row.get("actual_pnl_ils", 0)
             max_profit = row.get("max_profit_ils", 0)
             a_color = "green" if actual_pnl >= 0 else "red"
-            glow = "glow-green" if actual_pnl >= 0 else "glow-red"
+            glow = ""
 
             _result_status = str(row.get("result_status", "") or "")
-            _STATUS_BADGE = {
-                "max_profit": (C_GREEN, "מקסימום רווח"),
-                "partial":    (C_BLUE,  "רווח חלקי"),
-                "max_loss":   (C_RED,   "הפסד מקסימלי"),
-                "zero":       (C_DIM,   "אפס"),
+            _STATUS_MAP = {
+                "max_profit":       ("settled", "מקסימום רווח"),
+                "partial_loss_put": ("active",  "הפסד חלקי — Put"),
+                "partial_loss_call":("active",  "הפסד חלקי — Call"),
+                "partial":          ("active",  "רווח חלקי"),
+                "max_loss_put":     ("loss",    "הפסד מקסימלי — Put"),
+                "max_loss_call":    ("loss",    "הפסד מקסימלי — Call"),
+                "max_loss":         ("loss",    "הפסד מקסימלי"),
+                "zero":             ("active",  "אפס"),
             }
-            _s_color, _s_label = _STATUS_BADGE.get(
-                _result_status, (C_DIM, _result_status or "—"))
+            _badge_cls, _badge_lbl = _STATUS_MAP.get(
+                _result_status, ("active", _result_status or "—"))
             _status_badge_html = (
-                f'<span style="display:inline-block;padding:4px 12px;border-radius:20px;'
-                f'font-size:12px;font-weight:700;background:rgba(0,0,0,0.2);'
-                f'border:1px solid {_s_color};color:{_s_color};">{_s_label}</span>'
+                f'<span class="badge {_badge_cls}">{_badge_lbl}</span>'
             ) if _result_status else "—"
 
             st.markdown(
                 f'<div class="metric-grid">'
                 f'<div class="metric-card"><div class="label">Settlement Index</div><div class="value white">{fmt_num(settle_price)}</div></div>'
                 f'<div class="metric-card"><div class="label">Position</div><div style="margin-top:8px">{zone_badge}</div></div>'
-                f'<div class="metric-card {glow}"><div class="label">Actual P&L</div><div class="value {a_color}">{fmt_ils(actual_pnl)}</div></div>'
+                f'<div class="metric-card"><div class="label">Actual P&L</div><div class="value {a_color}">{fmt_ils(actual_pnl)}</div></div>'
                 f'<div class="metric-card"><div class="label">Max Possible</div><div class="value blue">{fmt_ils(max_profit)}</div></div>'
                 f'<div class="metric-card"><div class="label">תוצאה</div><div style="margin-top:8px">{_status_badge_html}</div></div>'
                 f'</div>', unsafe_allow_html=True)
@@ -2848,9 +2850,8 @@ elif has_strategies:
                                 ref_label=f"Settlement: {settle_price:,.2f}" if settle_price > 0 else "")
 
             pnl_class = "profit" if actual_pnl >= 0 else "loss"
-            glow_class = "glow-profit" if actual_pnl >= 0 else "glow-loss"
             st.markdown(
-                f'<div class="pnl-hero {glow_class}">'
+                f'<div class="pnl-hero">'
                 f'<div class="title">Settlement Result — {sel_hist_expiry} @ {sel_hist_interval:.1f}%</div>'
                 f'<div class="amount {pnl_class}">{fmt_ils(actual_pnl)}</div>'
                 f'<div style="color:{C_DIM};font-size:13px;margin-top:8px">out of max possible: {fmt_ils(max_profit)}</div>'
