@@ -292,6 +292,32 @@ def test_settlement_max_loss_put():
 # ──────────────────────────────────────────────────────────────────────────────
 # TEST 9 — _clean_numeric edge cases
 # ──────────────────────────────────────────────────────────────────────────────
+def test_wing_width_guard():
+    """
+    Sparse chain: no strike at the long-call target (SC + WING_WIDTH).
+    The long call must NOT collapse to a narrower wing on a tie-break;
+    it must pick the strike that yields a wing >= WING_WIDTH.
+
+    Reproduces the real 2026-06-02 bug where SC=4410, target LC=4430
+    (absent), and the engine picked 4420 (wing 10) instead of 4440.
+    """
+    # Chain has 4400/4410/4420/4440 but NO 4430
+    rows = [
+        _row(4400, call_pts=5.00, put_pts=0.10),
+        _row(4410, call_pts=4.00, put_pts=0.10),
+        _row(4420, call_pts=3.00, put_pts=0.10),
+        _row(4440, call_pts=2.00, put_pts=0.10),
+    ]
+    sc_strike = 4410.0
+    floor = sc_strike + se.WING_WIDTH  # 4430
+    lc = se._find_closest_option(rows, floor, "call",
+                                 exclude_strikes={sc_strike},
+                                 min_strike=floor)
+    assert lc["strike"] >= floor, f"Long call {lc['strike']} below floor {floor}"
+    assert lc["strike"] == 4440.0, f"Expected 4440 (wing 30), got {lc['strike']}"
+    print("PASS  test_wing_width_guard  (long call respects min wing)")
+
+
 def test_clean_numeric():
     assert se._clean_numeric(None)     == 0.0
     assert se._clean_numeric("")       == 0.0
@@ -326,6 +352,7 @@ if __name__ == "__main__":
     test_price_sanity_rejection()
     test_settlement_max_profit()
     test_settlement_max_loss_put()
+    test_wing_width_guard()
     test_clean_numeric()
 
     print()

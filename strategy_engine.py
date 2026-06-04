@@ -253,7 +253,9 @@ def _get_base_index(rows: list) -> float:
 
 def _find_closest_option(rows: list, target_strike: float,
                          side: str,
-                         exclude_strikes: Optional[set] = None) -> dict:
+                         exclude_strikes: Optional[set] = None,
+                         min_strike: Optional[float] = None,
+                         max_strike: Optional[float] = None) -> dict:
     """
     Find the option closest to target_strike with the best available price.
 
@@ -266,6 +268,10 @@ def _find_closest_option(rows: list, target_strike: float,
     side: 'call' or 'put'
     exclude_strikes: strikes already used (prevents Short & Long
                      from selecting the same option)
+    min_strike: if set, reject any candidate strictly below this value.
+                Used for the long call to guarantee a minimum wing width.
+    max_strike: if set, reject any candidate strictly above this value.
+                Used for the long put to guarantee a minimum wing width.
     """
     if exclude_strikes is None:
         exclude_strikes = set()
@@ -292,6 +298,12 @@ def _find_closest_option(rows: list, target_strike: float,
         if strike <= 0:
             continue
         if strike in exclude_strikes:
+            continue
+        # Wing-width guard: skip candidates that would create a wing
+        # narrower than required (long call below floor / long put above ceil)
+        if min_strike is not None and strike < min_strike:
+            continue
+        if max_strike is not None and strike > max_strike:
             continue
         # TASE API returns lastrate/baserate in ₪ per contract (points × multiplier)
         price      = _clean_numeric(row.get(price_col)) / TASE_MULTIPLIER
@@ -376,10 +388,21 @@ def _calculate_condor(base_index: float, interval_pct: float,
 
     short_call = _find_closest_option(rows_for_expiry, short_call_strike_target, "call")
     short_put  = _find_closest_option(rows_for_expiry, short_put_strike_target,  "put")
-    long_call  = _find_closest_option(rows_for_expiry, long_call_strike_target,  "call",
-                                      exclude_strikes={short_call["strike"]})
-    long_put   = _find_closest_option(rows_for_expiry, long_put_strike_target,   "put",
-                                      exclude_strikes={short_put["strike"]})
+
+    # Long legs must sit at least WING_WIDTH away from the *actual* matched
+    # short strikes — guarantees a wing of WING_WIDTH or wider even when the
+    # TASE chain is sparse (avoids degenerate 10-pt wings on tie-breaks).
+    long_call_floor   = short_call["strike"] + WING_WIDTH
+    long_put_ceil     = short_put["strike"]  - WING_WIDTH
+    long_call_target  = long_call_floor   # target the minimum-wing strike
+    long_put_target   = long_put_ceil
+
+    long_call  = _find_closest_option(rows_for_expiry, long_call_target, "call",
+                                      exclude_strikes={short_call["strike"]},
+                                      min_strike=long_call_floor)
+    long_put   = _find_closest_option(rows_for_expiry, long_put_target, "put",
+                                      exclude_strikes={short_put["strike"]},
+                                      max_strike=long_put_ceil)
 
     # Convert matched strikes / prices to Decimal for all subsequent math
     sc_strike = _to_decimal(short_call["strike"])
