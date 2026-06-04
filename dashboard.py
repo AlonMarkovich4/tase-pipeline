@@ -1580,7 +1580,7 @@ if nav_page == "📈 ביצועים":
         equity["cumulative"] = equity["actual_pnl_ils"].cumsum()
         _final = equity["cumulative"].iloc[-1]
         _line_c = C_GREEN if _final >= 0 else C_RED
-        _fill_c = "rgba(0,230,118,0.12)" if _final >= 0 else "rgba(255,23,68,0.10)"
+        _fill_c = "rgba(52,168,83,0.12)" if _final >= 0 else "rgba(229,57,53,0.10)"
 
         fig_eq = go.Figure()
         fig_eq.add_trace(go.Scatter(
@@ -1735,7 +1735,7 @@ elif nav_page == "🏠 Home":
             mprofit = float(r.get("max_profit_ils", 0) or 0)
             mrisk = abs(float(r.get("max_risk_ils", 0) or 0))
             is_pref = pct in preferred
-            pref_tag = ' · <span style="color:#00E676;">מועדף ✓</span>' if is_pref else ""
+            pref_tag = f' · <span style="color:{T_POS};">מועדף ✓</span>' if is_pref else ""
             medal = medals[i] if i < len(medals) else "•"
             top_cls = " top" if i == 0 else ""
             _win_bar = min(100.0, item["win"] * 100)
@@ -1812,23 +1812,30 @@ elif nav_page == "🏠 Home":
         risk.sort(key=lambda x: x["pct_dist"])
     near = [x for x in risk if x["pct_dist"] < 1.5]
     if near:
-        rh = ('<div class="table-scroll"><table><thead><tr>'
-              '<th>פקיעה</th><th>מרווח</th><th>Breakevens</th>'
-              '<th>מרחק</th><th>סטטוס</th></tr></thead><tbody>')
+        _risk_rows = []
         for x in near[:8]:
             r = x["row"]
-            be_l = float(r.get("breakeven_lower", 0) or 0)
-            be_u = float(r.get("breakeven_upper", 0) or 0)
-            css = "sell" if (not x["inside"] or x["pct_dist"] < 0.5) else ""
-            badge = ('<span class="badge active">בתוך הטווח</span>' if x["inside"]
-                     else '<span class="badge settled">פרץ</span>')
-            rh += (f'<tr><td>{r.get("expiry_date","")}</td>'
-                   f'<td><strong>{float(r.get("interval_pct",0) or 0):.1f}%</strong></td>'
-                   f'<td>{be_l:,.0f} — {be_u:,.0f}</td>'
-                   f'<td class="{css}"><strong>{x["pct_dist"]:.2f}%</strong></td>'
-                   f'<td>{badge}</td></tr>')
-        rh += '</tbody></table></div>'
-        st.markdown(rh, unsafe_allow_html=True)
+            _risk_rows.append({
+                "פקיעה":     r.get("expiry_date", ""),
+                "מרווח %":   float(r.get("interval_pct", 0) or 0),
+                "BE נמוך":   float(r.get("breakeven_lower", 0) or 0),
+                "BE גבוה":   float(r.get("breakeven_upper", 0) or 0),
+                "מרחק %":    round(x["pct_dist"], 2),
+                "סטטוס":     "בתוך הטווח" if x["inside"] else "פרץ",
+            })
+        st.dataframe(
+            pd.DataFrame(_risk_rows),
+            use_container_width=True,
+            column_config={
+                "פקיעה":   st.column_config.TextColumn(),
+                "מרווח %": st.column_config.NumberColumn(format="%.1f%%"),
+                "BE נמוך": st.column_config.NumberColumn(format="%.0f"),
+                "BE גבוה": st.column_config.NumberColumn(format="%.0f"),
+                "מרחק %":  st.column_config.NumberColumn(format="%.2f%%"),
+                "סטטוס":   st.column_config.TextColumn(),
+            },
+            hide_index=True,
+        )
     elif not has_strategies or live_index <= 0:
         st.caption("אין מדד חי או אסטרטגיות פעילות — לא ניתן להעריך סיכון כרגע.")
     else:
@@ -2031,23 +2038,31 @@ elif nav_page == "🕹️ Demo Trading":
             st.plotly_chart(fig, use_container_width=True)
 
             # ── Legs summary ──
-            legs_html = ('<div class="table-scroll"><table><thead><tr>'
-                         '<th>Leg</th><th>Action</th><th>Strike</th>'
-                         '<th>Premium (₪)</th><th>Qty</th><th>Cost/Credit (₪)</th>'
-                         '</tr></thead><tbody>')
+            _lrows = []
             for leg in legs:
-                css = "sell" if leg["action"] == "SELL" else "buy"
-                prem_ils = leg["premium_pts"] * MULTIPLIER
-                sign = -1 if leg["action"] == "BUY" else 1
-                cost = sign * prem_ils * leg["qty"]
-                cost_css = "buy" if cost > 0 else "sell"
-                cost_lbl = f"+{cost:,.0f}" if cost > 0 else f"{cost:,.0f}"
-                legs_html += (f'<tr><td>{leg["type"]}</td><td class="{css}">{leg["action"]}</td>'
-                              f'<td><strong>{fmt_num(leg["strike"], 0)}</strong></td>'
-                              f'<td>{fmt_num(prem_ils, 0)}</td><td>{leg["qty"]}</td>'
-                              f'<td class="{cost_css}"><strong>{cost_lbl}</strong></td></tr>')
-            legs_html += '</tbody></table></div>'
-            st.markdown(legs_html, unsafe_allow_html=True)
+                _prem_ils = leg["premium_pts"] * MULTIPLIER
+                _sign = -1 if leg["action"] == "BUY" else 1
+                _lrows.append({
+                    "Type":            leg["type"],
+                    "Action":          leg["action"],
+                    "Strike":          leg["strike"],
+                    "Premium (₪)":     round(_prem_ils, 0),
+                    "Qty":             leg["qty"],
+                    "Cost / Credit":   round(_sign * _prem_ils * leg["qty"], 0),
+                })
+            st.dataframe(
+                pd.DataFrame(_lrows),
+                use_container_width=True,
+                column_config={
+                    "Type":          st.column_config.TextColumn(),
+                    "Action":        st.column_config.TextColumn(),
+                    "Strike":        st.column_config.NumberColumn(format="%.0f"),
+                    "Premium (₪)":   st.column_config.NumberColumn(format="%.0f ₪"),
+                    "Qty":           st.column_config.NumberColumn(format="%d"),
+                    "Cost / Credit": st.column_config.NumberColumn(format="%+.0f ₪"),
+                },
+                hide_index=True,
+            )
 
             # ── Execute row ──
             exec_cols = st.columns([1.5, 2, 1.5])
@@ -2409,31 +2424,39 @@ elif nav_page == "🕹️ Demo Trading":
                     f'</div></div></div>', unsafe_allow_html=True)
 
                 # Per-leg P&L table
-                leg_html = ('<div class="table-scroll"><table><thead><tr>'
-                            '<th>Leg</th><th>Action</th><th>Strike</th>'
-                            '<th>Entry (₪)</th><th>Unrealized P&L</th>'
-                            '</tr></thead><tbody>')
+                _leg_rows = []
                 for leg in t_legs:
-                    l_type = leg.get("type", "")
+                    l_type   = leg.get("type", "")
                     l_action = leg.get("action", "")
                     l_strike = float(leg.get("strike", 0))
-                    l_prem = float(leg.get("premium_pts", 0))
-                    l_qty = int(leg.get("qty", 1))
-                    l_sign = 1 if l_action == "BUY" else -1
+                    l_prem   = float(leg.get("premium_pts", 0))
+                    l_qty    = int(leg.get("qty", 1))
+                    l_sign   = 1 if l_action == "BUY" else -1
                     if live_index > 0:
                         intrinsic = (max(live_index - l_strike, 0) if l_type == "Call"
                                      else max(l_strike - live_index, 0))
                         leg_pnl = l_sign * (intrinsic - l_prem) * MULTIPLIER * l_qty
                     else:
                         leg_pnl = 0.0
-                    css = "sell" if l_action == "SELL" else "buy"
-                    pnl_css = "buy" if leg_pnl >= 0 else "sell"
-                    leg_html += (f'<tr><td>{l_type}</td><td class="{css}">{l_action}</td>'
-                                 f'<td><strong>{l_strike:,.0f}</strong></td>'
-                                 f'<td>{l_prem * MULTIPLIER:,.0f}</td>'
-                                 f'<td class="{pnl_css}"><strong>{fmt_ils(leg_pnl)}</strong></td></tr>')
-                leg_html += '</tbody></table></div>'
-                st.markdown(leg_html, unsafe_allow_html=True)
+                    _leg_rows.append({
+                        "Type":           l_type,
+                        "Action":         l_action,
+                        "Strike":         l_strike,
+                        "Entry (₪)":      round(l_prem * MULTIPLIER, 0),
+                        "Unrealized P&L": round(leg_pnl, 0),
+                    })
+                st.dataframe(
+                    pd.DataFrame(_leg_rows),
+                    use_container_width=True,
+                    column_config={
+                        "Type":           st.column_config.TextColumn(),
+                        "Action":         st.column_config.TextColumn(),
+                        "Strike":         st.column_config.NumberColumn(format="%.0f"),
+                        "Entry (₪)":      st.column_config.NumberColumn(format="%.0f ₪"),
+                        "Unrealized P&L": st.column_config.NumberColumn(format="%+.0f ₪"),
+                    },
+                    hide_index=True,
+                )
 
                 pnl_cols = st.columns([2, 1])
                 with pnl_cols[0]:
@@ -2463,30 +2486,35 @@ elif nav_page == "🕹️ Demo Trading":
         # ── Closed trades ──
         if closed_trades:
             render_section_header("📜 היסטוריית עסקאות")
-            closed_html = ('<div class="table-scroll"><table><thead><tr>'
-                           '<th>ID</th><th>Strategy</th><th>Expiry</th>'
-                           '<th>Entry</th><th>Settlement</th><th>P&L</th><th>סיבה</th>'
-                           '</tr></thead><tbody>')
-            total_realized = 0.0
-            for ct in closed_trades:
-                ct_pnl = float(ct.get("pnl_ils", 0))
-                total_realized += ct_pnl
-                pnl_css = "buy" if ct_pnl >= 0 else "sell"
-                reason_lbl = "פקיעה" if "expiry" in ct.get("close_reason", "") else "ידני"
-                closed_html += (
-                    f'<tr><td>{ct.get("trade_id","?")}</td>'
-                    f'<td>{ct.get("strategy_name","")}</td>'
-                    f'<td>{ct.get("expiry_date","")}</td>'
-                    f'<td>{float(ct.get("entry_index",0)):,.0f}</td>'
-                    f'<td>{float(ct.get("settlement_index",0)):,.0f}</td>'
-                    f'<td class="{pnl_css}"><strong>{fmt_ils(ct_pnl)}</strong></td>'
-                    f'<td>{reason_lbl}</td></tr>')
-            closed_html += '</tbody></table></div>'
-            st.markdown(closed_html, unsafe_allow_html=True)
-            real_c = "#00E676" if total_realized >= 0 else "#FF1744"
+            total_realized = sum(float(ct.get("pnl_ils", 0)) for ct in closed_trades)
+            _closed_df = pd.DataFrame([{
+                "ID":          ct.get("trade_id", ""),
+                "Strategy":    ct.get("strategy_name", ""),
+                "Expiry":      ct.get("expiry_date", ""),
+                "Entry":       float(ct.get("entry_index", 0)),
+                "Settlement":  float(ct.get("settlement_index", 0)),
+                "P&L (₪)":     float(ct.get("pnl_ils", 0)),
+                "סיבה":        "פקיעה" if "expiry" in ct.get("close_reason", "") else "ידני",
+            } for ct in closed_trades])
+            st.dataframe(
+                _closed_df,
+                use_container_width=True,
+                column_config={
+                    "ID":         st.column_config.TextColumn(),
+                    "Strategy":   st.column_config.TextColumn(),
+                    "Expiry":     st.column_config.TextColumn(),
+                    "Entry":      st.column_config.NumberColumn(format="%.0f"),
+                    "Settlement": st.column_config.NumberColumn(format="%.0f"),
+                    "P&L (₪)":    st.column_config.NumberColumn(format="%+,.0f ₪"),
+                    "סיבה":       st.column_config.TextColumn(),
+                },
+                hide_index=True,
+            )
+            tot_color = T_POS if total_realized >= 0 else T_NEG
             st.markdown(
-                f'<div style="text-align:center;padding:10px;color:{C_DIM};font-size:13px;">'
-                f'סה"כ ממומש: <strong style="color:{real_c};">{fmt_ils(total_realized)}</strong></div>',
+                f'<div style="text-align:center;padding:8px 0;color:{T_TEXT2};font-size:13px;">'
+                f'סה"כ ממומש: <strong style="color:{tot_color};font-variant-numeric:tabular-nums;">'
+                f'{fmt_ils(total_realized)}</strong></div>',
                 unsafe_allow_html=True)
 
             import csv
