@@ -1120,13 +1120,17 @@ def render_payoff_chart(row, ref_price: float = 0, ref_label: str = ""):
         hovertemplate="Index: %{x:,.0f}<br>P&L: %{y:,.0f} ₪<extra></extra>"))
     # Zero line
     fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.10)", width=1))
-    # Breakeven markers
+    # Breakeven markers + labels
     be_x = [v for v in [be_lower, be_upper] if v > 0]
     if be_x:
         fig.add_trace(go.Scatter(
-            x=be_x, y=[0] * len(be_x), mode="markers",
-            marker=dict(color=T_WARN, size=8, symbol="circle",
+            x=be_x, y=[0] * len(be_x),
+            mode="markers+text",
+            marker=dict(color=T_WARN, size=9, symbol="circle",
                         line=dict(color=T_BG, width=2)),
+            text=[f"{b:,.0f}" for b in be_x],
+            textposition="top center",
+            textfont=dict(size=11, color=T_WARN, family="Inter"),
             showlegend=False,
             hovertemplate="Breakeven: %{x:,.0f}<extra></extra>"))
     # Reference line (live index / settlement)
