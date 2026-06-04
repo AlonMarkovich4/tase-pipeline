@@ -1216,14 +1216,18 @@ def render_expiry_metrics(row):
     else:
         rr_display = f"1:{fmt_num(rr, 1)}"
 
+    # Row 1 — P&L metrics
     render_metric_row(
         _card("Net Premium (pts)", fmt_num(net_prem), "pos" if net_prem > 0 else "neg"),
         _card("Max Profit",        fmt_ils(max_profit), "pos"),
         _card("Max Risk",          fmt_ils(-abs(max_risk)), "neg"),
         _card("Risk / Reward",     rr_display, "primary"),
-        _card("BE Lower",          fmt_num(be_lower, 0), "primary"),
-        _card("BE Upper",          fmt_num(be_upper, 0), "primary"),
-        _card("DTE",               str(dte), "accent"),
+    )
+    # Row 2 — Range metrics
+    render_metric_row(
+        _card("BE Lower",  fmt_num(be_lower, 0), "primary"),
+        _card("BE Upper",  fmt_num(be_upper, 0), "primary"),
+        _card("DTE",       str(dte),             "accent"),
     )
 
 
