@@ -4,3 +4,9 @@ pipeline.log
 __pycache__/
 credentials/
 .claude/
+
+# test artifacts
+.coverage
+.hypothesis/
+.pytest_cache/
+__pycache__/
