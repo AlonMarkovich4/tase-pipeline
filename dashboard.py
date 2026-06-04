@@ -54,17 +54,32 @@ except ImportError:
 DEMO_INITIAL_BALANCE = 100_000.0
 STRATEGY_LOOKBACK_DAYS = 90  # how far back to load strategies (perf)
 
-# Palette
-C_BG       = "#0B0D10"
-C_CARD     = "#151921"
-C_BORDER   = "#1E2433"
-C_TEXT     = "#E8EAED"
-C_DIM      = "#9AA0A6"
-C_GREEN    = "#00E676"
-C_RED      = "#FF1744"
-C_BLUE     = "#00B0FF"
-C_YELLOW   = "#FFD600"
-C_ORANGE   = "#FF9800"
+# ── Design tokens — single source of truth ──────────────────────
+T_BG      = "#0B0D10"          # page background
+T_SURFACE = "#111418"          # card / panel surface
+T_SURF2   = "#161B22"          # raised surface (table header, etc.)
+T_BORDER  = "rgba(255,255,255,0.07)"   # subtle border
+T_BORDER2 = "rgba(255,255,255,0.12)"   # stronger border
+T_TEXT1   = "#E8EAED"          # primary text
+T_TEXT2   = "#9AA0A6"          # secondary / label text
+T_TEXT3   = "#5F6368"          # tertiary / disabled
+T_ACCENT  = "#00B0FF"          # single accent (focus, links, active)
+T_POS     = "#34A853"          # positive / profit
+T_NEG     = "#E53935"          # negative / loss
+T_WARN    = "#F9A825"          # warning / amber
+T_REF     = "#00BCD4"          # reference lines (live index, settlement)
+
+# ── Backwards-compatible aliases (used throughout f-strings) ─────
+C_BG     = T_BG
+C_CARD   = T_SURFACE
+C_BORDER = T_BORDER
+C_TEXT   = T_TEXT1
+C_DIM    = T_TEXT2
+C_GREEN  = T_POS
+C_RED    = T_NEG
+C_BLUE   = T_ACCENT
+C_YELLOW = T_WARN
+C_ORANGE = "#F57C00"
 
 DAY_HE = {
     "Monday": "שני", "Tuesday": "שלישי", "Wednesday": "רביעי",
@@ -72,482 +87,304 @@ DAY_HE = {
 }
 
 # ==================================================================
-# GLOBAL CSS — all styles centralized
+# GLOBAL CSS — design system
 # ==================================================================
-st.markdown(f"""
+st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-html, body, [class*="css"] {{
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
-}}
-.main .block-container {{
-    padding: 1rem 2rem 2rem !important;
-    max-width: 1440px;
-}}
-#MainMenu, footer, header {{ visibility: hidden; }}
-.stDeployButton {{ display: none; }}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
 
-/* ── RTL for Hebrew content — tables & charts stay LTR ── */
+/* ── Tokens ──────────────────────────────────────────────────── */
+:root {
+  --bg:       #0B0D10;
+  --surface:  #111418;
+  --surf2:    #161B22;
+  --border:   rgba(255,255,255,0.07);
+  --border2:  rgba(255,255,255,0.12);
+  --text1:    #E8EAED;
+  --text2:    #9AA0A6;
+  --text3:    #5F6368;
+  --accent:   #00B0FF;
+  --pos:      #34A853;
+  --neg:      #E53935;
+  --warn:     #F9A825;
+  --ref:      #00BCD4;
+  --r-sm:     8px;
+  --r-md:     12px;
+}
+
+/* ── Base ────────────────────────────────────────────────────── */
+html, body, [class*="css"] {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+  font-weight: 400;
+}
+.main .block-container {
+  padding: 16px 24px 32px !important;
+  max-width: 1440px;
+}
+#MainMenu, footer, header { visibility: hidden; }
+.stDeployButton { display: none; }
+
+/* ── RTL / LTR ──────────────────────────────────────────────── */
 .stMarkdown, .stRadio, .stSelectbox, .stMultiSelect,
 .stTextInput, .stCaption, .stAlert, .stCheckbox,
-section[data-testid="stSidebar"] {{
-    direction: rtl;
-    text-align: right;
-}}
-/* Keep all numeric/tabular content LTR */
-.table-scroll, .metric-grid, .metric-card, .fresh-banner,
-.pnl-hero, .cmp-row, .dash-header,
-.stPlotlyChart, .chain-wrap {{
-    direction: ltr;
-    text-align: center;
-}}
-/* Streamlit radio/selectbox labels back to RTL */
-.stRadio label, .stSelectbox label, .stMultiSelect label {{
-    direction: rtl;
-    text-align: right;
-}}
+section[data-testid="stSidebar"] { direction: rtl; text-align: right; }
+.stRadio label, .stSelectbox label, .stMultiSelect label
+                                   { direction: rtl; text-align: right; }
+.metric-grid, .metric-card, .fresh-banner, .pnl-hero,
+.cmp-row, .dash-header, .stPlotlyChart,
+.chain-wrap, .table-scroll        { direction: ltr; text-align: left; }
 
-/* ── Lock sidebar open ── */
-[data-testid="collapsedControl"] {{ display: none !important; }}
-section[data-testid="stSidebar"] {{ min-width: 280px !important; }}
+/* ── Sidebar ─────────────────────────────────────────────────── */
+[data-testid="collapsedControl"]  { display: none !important; }
+section[data-testid="stSidebar"]  { min-width: 272px !important; }
 
-/* ── Header ── */
-.dash-header {{
-    text-align: center;
-    padding: 22px 0 10px;
-    margin-bottom: 6px;
-}}
-.dash-header h1 {{
-    color: {C_TEXT};
-    font-size: 28px;
-    font-weight: 800;
-    letter-spacing: -0.5px;
-    margin: 0;
-}}
-.dash-header .sub {{
-    color: {C_DIM};
-    font-size: 13px;
-    margin-top: 4px;
-}}
+/* ── Page header ─────────────────────────────────────────────── */
+.dash-header { text-align: center; padding: 24px 0 8px; }
+.dash-header h1 {
+  color: var(--text1); font-size: 22px; font-weight: 500;
+  letter-spacing: -0.3px; margin: 0;
+}
+.dash-header .sub { color: var(--text3); font-size: 12px; margin-top: 4px; }
 
-/* ── Freshness banner ── */
-.fresh-banner {{
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 18px;
-    padding: 8px 18px;
-    margin: 0 auto 18px;
-    max-width: 760px;
-    background: {C_CARD};
-    border: 1px solid {C_BORDER};
-    border-radius: 999px;
-    font-size: 12.5px;
-    color: {C_DIM};
-}}
-.fresh-banner .dot {{
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    display: inline-block;
-    margin-right: 6px;
-    vertical-align: middle;
-}}
-.fresh-banner .fresh-fresh .dot {{ background: {C_GREEN}; box-shadow: 0 0 8px {C_GREEN}66; }}
-.fresh-banner .fresh-stale .dot {{ background: {C_YELLOW}; }}
-.fresh-banner .fresh-cold  .dot {{ background: {C_RED};    }}
-.fresh-banner .fresh-closed .dot {{ background: {C_DIM};   }}
-.fresh-banner .fresh-fresh {{ color: {C_GREEN}; }}
-.fresh-banner .fresh-stale {{ color: {C_YELLOW}; }}
-.fresh-banner .fresh-cold  {{ color: {C_RED};    }}
-.fresh-banner .fresh-closed {{ color: {C_DIM};   }}
-.fresh-banner .sep {{ color: {C_BORDER}; }}
-.fresh-banner b {{ color: {C_TEXT}; font-weight: 600; }}
+/* ── Freshness banner ────────────────────────────────────────── */
+.fresh-banner {
+  display: flex; align-items: center; justify-content: center;
+  gap: 16px; padding: 6px 16px; margin: 0 auto 16px;
+  max-width: 720px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 9999px;
+  font-size: 12px; color: var(--text2);
+}
+.fresh-banner .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  display: inline-block; margin-right: 5px; vertical-align: middle;
+}
+.fresh-banner .fresh-fresh .dot  { background: var(--pos); }
+.fresh-banner .fresh-stale .dot  { background: var(--warn); }
+.fresh-banner .fresh-cold  .dot  { background: var(--neg); }
+.fresh-banner .fresh-closed .dot { background: var(--text3); }
+.fresh-banner .fresh-fresh  { color: var(--pos); }
+.fresh-banner .fresh-stale  { color: var(--warn); }
+.fresh-banner .fresh-cold   { color: var(--neg); }
+.fresh-banner .fresh-closed { color: var(--text2); }
+.fresh-banner .sep { color: var(--border2); }
+.fresh-banner b    { color: var(--text1); font-weight: 500; }
 
-/* ── Metric Cards ── */
-.metric-grid {{
-    display: flex;
-    gap: 14px;
-    margin: 16px 0;
-    flex-wrap: wrap;
-}}
-.metric-card {{
-    background: {C_CARD};
-    border: 1px solid {C_BORDER};
-    border-radius: 12px;
-    padding: 18px 22px;
-    flex: 1;
-    min-width: 170px;
-    text-align: center;
-    position: relative;
-    overflow: hidden;
-}}
-.metric-card .label {{
-    color: #B0B5BB;
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 6px;
-}}
-.metric-card .value {{
-    font-size: 26px;
-    font-weight: 800;
-    letter-spacing: -0.5px;
-}}
-.metric-card .value.green {{ color: {C_GREEN}; }}
-.metric-card .value.red {{ color: {C_RED}; }}
-.metric-card .value.blue {{ color: {C_BLUE}; }}
-.metric-card .value.yellow {{ color: {C_YELLOW}; }}
-.metric-card .value.white {{ color: {C_TEXT}; }}
+/* ── Metric cards ────────────────────────────────────────────── */
+.metric-grid {
+  display: flex; gap: 12px; margin: 12px 0; flex-wrap: wrap;
+}
+.metric-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: 16px 20px;
+  flex: 1; min-width: 152px; text-align: center;
+}
+.metric-card .label {
+  color: var(--text2); font-size: 11px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+}
+.metric-card .value {
+  font-size: 22px; font-weight: 600; letter-spacing: -0.4px;
+  font-variant-numeric: tabular-nums;
+}
+/* semantic */
+.metric-card .value.pos,   .metric-card .value.green  { color: var(--pos);   }
+.metric-card .value.neg,   .metric-card .value.red    { color: var(--neg);   }
+.metric-card .value.accent,.metric-card .value.blue   { color: var(--accent);}
+.metric-card .value.warn,  .metric-card .value.yellow { color: var(--warn);  }
+.metric-card .value.primary,.metric-card .value.white { color: var(--text1); }
+.metric-card .value.muted                             { color: var(--text2); }
+/* glow classes silently stripped — no decorative shadows */
+.metric-card.glow-green, .metric-card.glow-red        { /* flat */ }
 
-.metric-card.glow-green {{
-    border-color: rgba(0,230,118,0.3);
-    box-shadow: 0 0 20px rgba(0,230,118,0.12);
-}}
-.metric-card.glow-red {{
-    border-color: rgba(255,23,68,0.3);
-    box-shadow: 0 0 20px rgba(255,23,68,0.12);
-}}
+/* ── P&L hero ────────────────────────────────────────────────── */
+.pnl-hero {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: 32px 24px;
+  text-align: center; margin: 16px 0;
+}
+.pnl-hero .title  { color: var(--text2); font-size: 13px; font-weight: 500; margin-bottom: 12px; }
+.pnl-hero .amount {
+  font-size: 40px; font-weight: 600; letter-spacing: -1px;
+  font-variant-numeric: tabular-nums;
+}
+.pnl-hero .amount.profit { color: var(--pos); }
+.pnl-hero .amount.loss   { color: var(--neg); }
+.pnl-hero.glow-profit, .pnl-hero.glow-loss { /* flat */ }
 
-/* ── Big P&L Hero ── */
-.pnl-hero {{
-    background: {C_CARD};
-    border: 1px solid {C_BORDER};
-    border-radius: 14px;
-    padding: 28px;
-    text-align: center;
-    margin: 18px 0;
-}}
-.pnl-hero .title {{
-    color: {C_DIM};
-    font-size: 14px;
-    font-weight: 600;
-    margin-bottom: 8px;
-}}
-.pnl-hero .amount {{
-    font-size: 44px;
-    font-weight: 800;
-    letter-spacing: -1px;
-}}
-.pnl-hero .amount.profit {{
-    color: {C_GREEN};
-    text-shadow: 0 0 30px rgba(0,230,118,0.35);
-}}
-.pnl-hero .amount.loss {{
-    color: {C_RED};
-    text-shadow: 0 0 30px rgba(255,23,68,0.35);
-}}
-.pnl-hero.glow-profit {{
-    border-color: rgba(0,230,118,0.35);
-    box-shadow: 0 0 35px rgba(0,230,118,0.10);
-}}
-.pnl-hero.glow-loss {{
-    border-color: rgba(255,23,68,0.35);
-    box-shadow: 0 0 35px rgba(255,23,68,0.10);
-}}
+/* ── HTML tables ─────────────────────────────────────────────── */
+.table-scroll {
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  margin: 8px 0; border-radius: var(--r-sm);
+  border: 1px solid var(--border); background: var(--surface);
+}
+.table-scroll table {
+  width: 100%; min-width: 520px; border-collapse: separate;
+  border-spacing: 0; font-size: 13px; direction: ltr;
+  font-variant-numeric: tabular-nums;
+}
+.table-scroll th {
+  background: var(--surf2); color: var(--text2);
+  font-weight: 500; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.4px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  text-align: right; white-space: nowrap;
+}
+.table-scroll td {
+  padding: 8px 14px; text-align: right;
+  border-bottom: 1px solid var(--border);
+  color: var(--text1); font-weight: 400;
+}
+.table-scroll tr:last-child td { border-bottom: none; }
+.table-scroll tr:hover td      { background: rgba(255,255,255,0.02); }
+.table-scroll .buy  { color: var(--pos); font-weight: 500; }
+.table-scroll .sell { color: var(--neg); font-weight: 500; }
 
-/* ── Tables — responsive scroll wrapper ── */
-.table-scroll {{
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    margin: 12px 0;
-    border-radius: 10px;
-    border: 1px solid {C_BORDER};
-    background: {C_CARD};
-}}
-.table-scroll table {{
-    width: 100%;
-    min-width: 560px;
-    border-collapse: separate;
-    border-spacing: 0;
-    font-size: 14px;
-    direction: ltr;
-}}
-.table-scroll th {{
-    background: rgba(255,255,255,0.03);
-    color: {C_DIM};
-    font-weight: 600;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 11px 14px;
-    border-bottom: 1px solid {C_BORDER};
-    text-align: center;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-}}
-.table-scroll td {{
-    padding: 10px 14px;
-    text-align: center;
-    border-bottom: 1px solid rgba(30,36,51,0.6);
-    color: {C_TEXT};
-    font-weight: 500;
-}}
-.table-scroll tr:last-child td {{ border-bottom: none; }}
-.table-scroll tr:hover td {{ background: rgba(255,255,255,0.02); }}
-.table-scroll .buy  {{ color: {C_GREEN}; font-weight: 700; }}
-.table-scroll .sell {{ color: {C_RED}; font-weight: 700; }}
+/* ── Status badge ────────────────────────────────────────────── */
+.badge {
+  display: inline-block; padding: 3px 10px; border-radius: 4px;
+  font-size: 11px; font-weight: 500;
+}
+.badge.settled { background: rgba(52,168,83,.10);  color: var(--pos);    border: 1px solid rgba(52,168,83,.2); }
+.badge.active  { background: rgba(0,176,255,.10);  color: var(--accent); border: 1px solid rgba(0,176,255,.2); }
+.badge.loss    { background: rgba(229,57,53,.10);  color: var(--neg);    border: 1px solid rgba(229,57,53,.2); }
 
-/* ── Status Badge ── */
-.badge {{
-    display: inline-block;
-    padding: 4px 14px;
-    border-radius: 20px;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-}}
-.badge.settled {{
-    background: rgba(0,230,118,0.12);
-    color: {C_GREEN};
-    border: 1px solid rgba(0,230,118,0.25);
-}}
-.badge.active {{
-    background: rgba(0,176,255,0.12);
-    color: {C_BLUE};
-    border: 1px solid rgba(0,176,255,0.25);
-}}
-.badge.loss {{
-    background: rgba(255,23,68,0.12);
-    color: {C_RED};
-    border: 1px solid rgba(255,23,68,0.25);
-}}
+/* ── Empty state ─────────────────────────────────────────────── */
+.empty-state {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: 48px 24px;
+  text-align: center; margin: 12px 0;
+}
+.empty-state .es-icon  { font-size: 32px; margin-bottom: 8px; }
+.empty-state .es-title { color: var(--text1); font-size: 15px; font-weight: 500; }
+.empty-state .es-sub   { color: var(--text2); font-size: 13px; margin-top: 6px; }
 
-/* ── Unified empty-state card ── */
-.empty-state {{
-    background: {C_CARD};
-    border: 1px solid {C_BORDER};
-    border-radius: 12px;
-    padding: 40px 20px;
-    text-align: center;
-    margin: 12px 0;
-}}
-.empty-state .es-icon {{ font-size: 36px; margin-bottom: 8px; }}
-.empty-state .es-title {{
-    color: {C_TEXT}; font-size: 16px; font-weight: 700;
-}}
-.empty-state .es-sub {{
-    color: #B0B5BB; font-size: 13px; margin-top: 6px;
-}}
+/* ── Recommendation card ─────────────────────────────────────── */
+.rec-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: 14px 16px;
+  margin: 8px 0; direction: ltr;
+}
+.rec-card.top { border-left: 3px solid var(--pos); }
+.rec-card .rec-header {
+  display: flex; justify-content: space-between;
+  align-items: center; flex-wrap: wrap; gap: 8px;
+}
+.rec-card .rec-stats         { display: flex; gap: 16px; align-items: center; }
+.rec-card .rec-stats span    { color: var(--text2); font-size: 12px; }
 
-/* ── Recommendation card (Home page) ── */
-.rec-card {{
-    background: {C_CARD};
-    border: 1px solid {C_BORDER};
-    border-radius: 12px;
-    padding: 14px 18px;
-    margin: 8px 0;
-    direction: ltr;
-}}
-.rec-card.top {{ border-left: 4px solid {C_GREEN}; }}
-.rec-card .rec-header {{
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 10px;
-}}
-.rec-card .rec-stats {{
-    display: flex;
-    gap: 18px;
-    align-items: center;
-}}
-.rec-card .rec-stats span {{
-    color: {C_DIM};
-    font-size: 12px;
-}}
+/* ── Section header ──────────────────────────────────────────── */
+.section-hdr {
+  color: var(--text2); font-size: 11px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.6px;
+  margin: 24px 0 12px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  direction: rtl; text-align: right;
+}
 
-/* ── Section Header ── */
-.section-hdr {{
-    color: {C_TEXT};
-    font-size: 16px;
-    font-weight: 700;
-    margin: 24px 0 10px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid {C_BORDER};
-    direction: rtl;
-    text-align: right;
-}}
+/* ── Breadcrumb ──────────────────────────────────────────────── */
+.step-breadcrumb { display: flex; align-items: center; gap: 6px; margin: 12px 0 8px; direction: rtl; }
+.step-breadcrumb .crumb {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; font-weight: 400; color: var(--text2);
+}
+.step-breadcrumb .crumb.active { color: var(--accent); }
+.step-breadcrumb .num {
+  width: 20px; height: 20px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; background: var(--surface);
+  border: 1px solid var(--border); color: var(--text2); flex-shrink: 0;
+}
+.step-breadcrumb .crumb.active .num {
+  background: rgba(0,176,255,.1); border-color: var(--accent); color: var(--accent);
+}
+.step-breadcrumb .sep { color: var(--border2); }
 
-/* ── Step Breadcrumb ── */
-.step-breadcrumb {{
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin: 16px 0 8px;
-    direction: rtl;
-}}
-.step-breadcrumb .crumb {{
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    font-weight: 600;
-    color: {C_DIM};
-}}
-.step-breadcrumb .crumb.active {{
-    color: {C_BLUE};
-}}
-.step-breadcrumb .num {{
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    font-weight: 700;
-    background: {C_CARD};
-    border: 1px solid {C_BORDER};
-    color: {C_DIM};
-    flex-shrink: 0;
-}}
-.step-breadcrumb .crumb.active .num {{
-    background: rgba(0,176,255,0.15);
-    border-color: {C_BLUE};
-    color: {C_BLUE};
-}}
-.step-breadcrumb .sep {{
-    color: {C_BORDER};
-    font-size: 14px;
-    margin: 0 2px;
-}}
+/* ── Comparison bar ──────────────────────────────────────────── */
+.cmp-row {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 12px 16px; margin: 6px 0;
+}
+.cmp-line         { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.cmp-line .cmp-lbl { color: var(--text2); font-size: 11px; min-width: 52px; }
+.cmp-line .cmp-track {
+  flex: 1; height: 4px; background: rgba(255,255,255,0.06);
+  border-radius: 2px; overflow: hidden;
+}
+.cmp-line .cmp-fill  { height: 100%; border-radius: 2px; }
+.cmp-line .cmp-val {
+  min-width: 80px; text-align: right;
+  font-weight: 500; font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
 
-/* ── Comparison Bar ── */
-.cmp-row {{
-    background: {C_CARD};
-    border: 1px solid {C_BORDER};
-    border-radius: 10px;
-    padding: 14px 18px;
-    margin: 8px 0;
-}}
-.cmp-line {{
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin: 3px 0;
-}}
-.cmp-line .cmp-lbl {{
-    color: {C_DIM};
-    font-size: 11px;
-    font-weight: 600;
-    min-width: 55px;
-    text-align: left;
-}}
-.cmp-line .cmp-track {{
-    flex: 1;
-    height: 20px;
-    background: rgba(255,255,255,0.04);
-    border-radius: 5px;
-    overflow: hidden;
-}}
-.cmp-line .cmp-fill {{
-    height: 100%;
-    border-radius: 5px;
-    transition: width 0.3s ease;
-}}
-.cmp-line .cmp-val {{
-    min-width: 85px;
-    text-align: right;
-    font-weight: 700;
-    font-size: 13px;
-}}
+/* ── Strike zone badge ───────────────────────────────────────── */
+.strike-zone { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+.strike-zone.in       { background: rgba(52,168,83,.12);  color: var(--pos); }
+.strike-zone.out-put  { background: rgba(229,57,53,.10);  color: var(--neg); }
+.strike-zone.out-call { background: rgba(229,57,53,.10);  color: var(--neg); }
 
-/* ── Settlement position indicator ── */
-.strike-zone {{
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 700;
-}}
-.strike-zone.in {{
-    background: rgba(0,230,118,0.15);
-    color: {C_GREEN};
-}}
-.strike-zone.out-put {{
-    background: rgba(255,23,68,0.12);
-    color: {C_RED};
-}}
-.strike-zone.out-call {{
-    background: rgba(255,23,68,0.12);
-    color: {C_RED};
-}}
+/* ── Option chain ────────────────────────────────────────────── */
+.chain-wrap {
+  overflow-x: auto; margin: 8px 0; border-radius: var(--r-sm);
+  border: 1px solid var(--border); background: var(--surface);
+}
+.chain-wrap table {
+  width: 100%; min-width: 760px; border-collapse: separate;
+  border-spacing: 0; font-size: 12px; direction: ltr;
+  font-variant-numeric: tabular-nums;
+}
+.chain-wrap th {
+  background: var(--surf2); color: var(--text2); font-weight: 500;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+  text-align: center; white-space: nowrap;
+}
+.chain-wrap th.call-hdr   { color: var(--pos); }
+.chain-wrap th.put-hdr    { color: var(--neg); }
+.chain-wrap th.strike-hdr { color: var(--text1); font-size: 11px; min-width: 64px; }
+.chain-wrap td {
+  padding: 6px 10px; text-align: center;
+  border-bottom: 1px solid var(--border);
+  color: var(--text1); font-weight: 400;
+}
+.chain-wrap tr:last-child td { border-bottom: none; }
+.chain-wrap tr:hover td      { background: rgba(255,255,255,.02); }
+.chain-wrap td.strike-col {
+  font-weight: 500; font-size: 13px; color: var(--text1);
+  background: rgba(255,255,255,.02);
+  border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+}
+.chain-wrap td.itm   { background: rgba(255,255,255,.02); }
+.chain-wrap td.atm-row {
+  background: rgba(0,176,255,.04) !important;
+  border-top: 1px solid rgba(0,176,255,.15);
+  border-bottom: 1px solid rgba(0,176,255,.15);
+}
+.chain-wrap .oi, .chain-wrap .delta { color: var(--text2); }
+.chain-wrap .no-data                { color: var(--text3); }
 
-/* ── Option Chain (Sandbox) ── */
-.chain-wrap {{
-    overflow-x: auto;
-    margin: 12px 0;
-    border-radius: 10px;
-    border: 1px solid {C_BORDER};
-    background: {C_CARD};
-}}
-.chain-wrap table {{
-    width: 100%;
-    min-width: 820px;
-    border-collapse: separate;
-    border-spacing: 0;
-    font-size: 13px;
-    direction: ltr;
-}}
-.chain-wrap th {{
-    background: rgba(255,255,255,0.03);
-    color: {C_DIM};
-    font-weight: 600;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    padding: 9px 10px;
-    border-bottom: 1px solid {C_BORDER};
-    text-align: center;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-}}
-.chain-wrap th.call-hdr {{ color: {C_GREEN}; }}
-.chain-wrap th.put-hdr  {{ color: {C_RED}; }}
-.chain-wrap th.strike-hdr {{
-    color: {C_YELLOW};
-    font-size: 11px;
-    min-width: 70px;
-}}
-.chain-wrap td {{
-    padding: 7px 10px;
-    text-align: center;
-    border-bottom: 1px solid rgba(30,36,51,0.5);
-    color: {C_TEXT};
-    font-weight: 500;
-    font-size: 13px;
-}}
-.chain-wrap tr:last-child td {{ border-bottom: none; }}
-.chain-wrap tr:hover td {{ background: rgba(255,255,255,0.025); }}
-.chain-wrap td.strike-col {{
-    font-weight: 800;
-    font-size: 14px;
-    color: {C_YELLOW};
-    background: rgba(255,214,0,0.04);
-    border-left: 1px solid {C_BORDER};
-    border-right: 1px solid {C_BORDER};
-}}
-.chain-wrap td.itm {{ background: rgba(255,255,255,0.025); }}
-.chain-wrap td.atm-row {{
-    background: rgba(0,176,255,0.06) !important;
-    border-top: 1px solid rgba(0,176,255,0.2);
-    border-bottom: 1px solid rgba(0,176,255,0.2);
-}}
-.chain-wrap .oi    {{ color: {C_DIM}; font-size: 11px; }}
-.chain-wrap .delta {{ color: {C_DIM}; font-size: 11px; }}
-.chain-wrap .no-data {{ color: rgba(255,255,255,0.15); }}
-
-/* ── Streamlit overrides ── */
-.stSelectbox label {{ color: {C_TEXT} !important; font-weight: 600 !important; }}
-div[data-baseweb="select"] {{
-    background: {C_CARD} !important;
-    border: 1px solid {C_BORDER} !important;
-    border-radius: 8px !important;
-}}
+/* ── Streamlit widget overrides ─────────────────────────────── */
+.stSelectbox label  { color: var(--text1) !important; font-weight: 500 !important; }
+div[data-baseweb="select"] {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--r-sm) !important;
+}
+.stTabs [data-baseweb="tab-list"] {
+  gap: 4px; background: transparent;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+.stTabs [data-baseweb="tab"] {
+  font-size: 13px; font-weight: 400; color: var(--text2);
+  background: transparent !important; border: none !important;
+  padding: 8px 16px; border-radius: 0;
+}
+.stTabs [aria-selected="true"] {
+  color: var(--text1) !important; font-weight: 500 !important;
+  border-bottom: 2px solid var(--accent) !important;
+}
+.stTabs [data-baseweb="tab-panel"] { padding-top: 16px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1234,11 +1071,10 @@ def sandbox_trade_pnl(trade: dict, current_index: float) -> float:
 # SHARED RENDER HELPERS — used across all pages
 # ==================================================================
 
-def _card(label: str, value: str, color: str = "white", glow: str = "") -> str:
-    """Return a metric-card HTML snippet (embed inside metric-grid div)."""
-    glow_cls = f" {glow}" if glow else ""
+def _card(label: str, value: str, color: str = "primary", glow: str = "") -> str:
+    # glow param kept for call-site backwards compat; ignored (flat design)
     return (
-        f'<div class="metric-card{glow_cls}">'
+        f'<div class="metric-card">'
         f'<div class="label">{label}</div>'
         f'<div class="value {color}">{value}</div>'
         f'</div>'
@@ -1246,7 +1082,6 @@ def _card(label: str, value: str, color: str = "white", glow: str = "") -> str:
 
 
 def render_metric_row(*cards: str) -> None:
-    """Render a horizontal row of metric cards from _card() snippets."""
     st.markdown(
         f'<div class="metric-grid">{"".join(cards)}</div>',
         unsafe_allow_html=True,
@@ -1254,7 +1089,6 @@ def render_metric_row(*cards: str) -> None:
 
 
 def render_section_header(text: str) -> None:
-    """Render a styled section divider with title."""
     st.markdown(f'<div class="section-hdr">{text}</div>', unsafe_allow_html=True)
 
 
@@ -1267,40 +1101,52 @@ def render_payoff_chart(row, ref_price: float = 0, ref_label: str = ""):
     be_upper = row.get("breakeven_upper", 0)
     be_lower = row.get("breakeven_lower", 0)
     fig = go.Figure()
-    profit_y = np.where(y_pnl >= 0, y_pnl, 0)
-    fig.add_trace(go.Scatter(x=x_prices, y=profit_y, fill="tozeroy",
-                             fillcolor="rgba(38,222,129,0.50)", line=dict(width=0),
-                             showlegend=False, hoverinfo="skip"))
-    loss_y = np.where(y_pnl < 0, y_pnl, 0)
-    fig.add_trace(go.Scatter(x=x_prices, y=loss_y, fill="tozeroy",
-                             fillcolor="rgba(255,77,77,0.50)", line=dict(width=0),
-                             showlegend=False, hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=x_prices, y=y_pnl, mode="lines",
-                             line=dict(color="rgba(255,255,255,0.35)", width=1),
-                             showlegend=False,
-                             hovertemplate="Index: %{x:,.0f}<br>P&L: %{y:,.0f} ₪<extra></extra>"))
-    fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.15)", width=1))
+    # Profit fill — muted green, no neon
+    fig.add_trace(go.Scatter(
+        x=x_prices, y=np.where(y_pnl >= 0, y_pnl, 0),
+        fill="tozeroy", fillcolor="rgba(52,168,83,0.18)",
+        line=dict(width=0), showlegend=False, hoverinfo="skip"))
+    # Loss fill
+    fig.add_trace(go.Scatter(
+        x=x_prices, y=np.where(y_pnl < 0, y_pnl, 0),
+        fill="tozeroy", fillcolor="rgba(229,57,53,0.18)",
+        line=dict(width=0), showlegend=False, hoverinfo="skip"))
+    # P&L line
+    fig.add_trace(go.Scatter(
+        x=x_prices, y=y_pnl, mode="lines",
+        line=dict(color="rgba(255,255,255,0.25)", width=1),
+        showlegend=False,
+        hovertemplate="Index: %{x:,.0f}<br>P&L: %{y:,.0f} ₪<extra></extra>"))
+    # Zero line
+    fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.10)", width=1))
+    # Breakeven markers
     be_x = [v for v in [be_lower, be_upper] if v > 0]
     if be_x:
-        fig.add_trace(go.Scatter(x=be_x, y=[0] * len(be_x), mode="markers",
-                                 marker=dict(color=C_ORANGE, size=10, symbol="circle",
-                                             line=dict(color=C_BG, width=2)),
-                                 showlegend=False,
-                                 hovertemplate="Breakeven: %{x:,.0f}<extra></extra>"))
+        fig.add_trace(go.Scatter(
+            x=be_x, y=[0] * len(be_x), mode="markers",
+            marker=dict(color=T_WARN, size=8, symbol="circle",
+                        line=dict(color=T_BG, width=2)),
+            showlegend=False,
+            hovertemplate="Breakeven: %{x:,.0f}<extra></extra>"))
+    # Reference line (live index / settlement)
     if ref_price > 0:
-        fig.add_vline(x=ref_price, line=dict(color="#00BCD4", width=2, dash="dot"))
-        fig.add_annotation(x=ref_price, y=max(y_pnl) * 0.9, text=ref_label,
-                           showarrow=False, font=dict(size=13, color="#00BCD4", family="Inter"),
-                           bgcolor="rgba(11,13,16,0.85)", bordercolor="#00BCD4",
-                           borderwidth=1, borderpad=6)
+        fig.add_vline(x=ref_price, line=dict(color=T_REF, width=1.5, dash="dot"))
+        fig.add_annotation(
+            x=ref_price, y=max(y_pnl) * 0.88, text=ref_label, showarrow=False,
+            font=dict(size=12, color=T_REF, family="Inter"),
+            bgcolor=T_BG, bordercolor=T_REF, borderwidth=1, borderpad=5)
     fig.update_layout(
-        template="plotly_dark", paper_bgcolor=C_BG, plot_bgcolor=C_BG,
-        height=360, margin=dict(l=50, r=30, t=20, b=50),
-        xaxis=dict(gridcolor="rgba(255,255,255,0.04)", zeroline=False,
-                   tickformat=",", tickfont=dict(size=10, color=C_DIM), dtick=40),
-        yaxis=dict(title="P&L (₪)", gridcolor="rgba(255,255,255,0.06)", zeroline=False,
-                   tickformat=",", tickfont=dict(size=10, color=C_DIM),
-                   title_font=dict(size=11, color=C_DIM)),
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        height=340, margin=dict(l=52, r=16, t=8, b=40),
+        xaxis=dict(
+            gridcolor="rgba(255,255,255,0.05)", zeroline=False,
+            tickformat=",", tickfont=dict(size=10, color=T_TEXT2),
+            dtick=40, showline=False),
+        yaxis=dict(
+            title="P&L (₪)", gridcolor="rgba(255,255,255,0.05)", zeroline=False,
+            tickformat=",", tickfont=dict(size=10, color=T_TEXT2),
+            title_font=dict(size=11, color=T_TEXT2), showline=False),
         showlegend=False, hovermode="x unified",
     )
     st.plotly_chart(fig, use_container_width=True)
