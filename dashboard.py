@@ -623,11 +623,47 @@ def set_preferred_intervals(intervals: list) -> bool:
     val = ",".join(f"{float(x):.1f}" for x in sorted(set(intervals)))
     try:
         url = f"{SUPABASE_URL}/rest/v1/pipeline_state?on_conflict=key"
-        h = dict(_supabase_headers())  # copy — don't pollute cached headers
+        h = dict(_supabase_headers())
         h["Prefer"] = "resolution=merge-duplicates,return=minimal"
         r = httpx.post(url, headers=h,
                        content=json.dumps([{"key": "preferred_intervals",
                                             "value": val}]), timeout=8)
+        return r.status_code in (200, 201, 204)
+    except Exception:
+        return False
+
+
+@st.cache_data(ttl=60)
+def get_portfolio_capital() -> float:
+    """Portfolio capital configured by the user (stored in pipeline_state).
+    Falls back to DEMO_INITIAL_BALANCE if not set."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return DEMO_INITIAL_BALANCE
+    try:
+        url = (f"{SUPABASE_URL}/rest/v1/pipeline_state"
+               f"?key=eq.portfolio_capital&select=value&limit=1")
+        r = httpx.get(url, headers=_supabase_headers(), timeout=8)
+        if r.status_code in (200, 206) and r.json():
+            raw = r.json()[0].get("value", "") or ""
+            v = float(raw)
+            if v > 0:
+                return v
+    except Exception:
+        pass
+    return DEMO_INITIAL_BALANCE
+
+
+def set_portfolio_capital(amount: float) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY or amount <= 0:
+        return False
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/pipeline_state?on_conflict=key"
+        h = dict(_supabase_headers())
+        h["Prefer"] = "resolution=merge-duplicates,return=minimal"
+        r = httpx.post(url, headers=h,
+                       content=json.dumps([{"key": "portfolio_capital",
+                                            "value": str(round(amount, 2))}]),
+                       timeout=8)
         return r.status_code in (200, 201, 204)
     except Exception:
         return False
@@ -1903,21 +1939,19 @@ elif nav_page == "🏠 Home":
                     lead_txt = f"{lead:.1f}% ({fmt_ils(by_int.max())})"
     demo_bal = get_demo_balance()
     n_demo_open = len(load_demo_trades("open"))
-    wk_color = "pos" if week_pnl >= 0 else "neg"
-    bal_color = "pos" if demo_bal >= DEMO_INITIAL_BALANCE else "neg"
+    wk_color  = "pos" if week_pnl >= 0 else "neg"
+    _cap      = get_portfolio_capital()
+    bal_color = "pos" if demo_bal >= _cap else "neg"
+    _bal_pct  = (demo_bal - _cap) / _cap * 100 if _cap else 0
     pref_label = ("+".join(f"{p:.1f}%" for p in preferred)
                   if preferred else "כל המרווחים")
-    st.markdown(
-        f'<div class="metric-grid">'
-        f'<div class="metric-card"><div class="label">P&L שבועי (מסולק)</div>'
-        f'<div class="value {wk_color}">{fmt_ils(week_pnl)}</div></div>'
-        f'<div class="metric-card"><div class="label">מרווח מוביל</div>'
-        f'<div class="value white">{lead_txt}</div></div>'
-        f'<div class="metric-card"><div class="label">פוזיציות דמו פתוחות</div>'
-        f'<div class="value blue">{n_demo_open}</div></div>'
-        f'<div class="metric-card"><div class="label">יתרת דמו</div>'
-        f'<div class="value {bal_color}">{demo_bal:,.0f} ₪</div></div>'
-        f'</div>', unsafe_allow_html=True)
+    render_metric_row(
+        _card("P&L שבועי (מסולק)", fmt_ils(week_pnl),  wk_color),
+        _card("מרווח מוביל",        lead_txt,           "primary"),
+        _card("פוזיציות דמו פתוחות", str(n_demo_open), "accent"),
+        _card("תיק דמו",
+              f"{demo_bal:,.0f} ₪ ({_bal_pct:+.1f}%)",  bal_color),
+    )
 
     # ─────────────────────────────────────────────────────────────
     # 4) PREFERRED INTERVALS — drives the "real" weekly win-rate
@@ -2435,24 +2469,58 @@ elif nav_page == "🕹️ Demo Trading":
     with _tab3:
         render_section_header("💼 תיק דמו — פוזיציות ו-P&L")
 
-        current_balance = get_demo_balance()
-        open_trades = load_demo_trades("open")
-        closed_trades = load_demo_trades("closed")
+        portfolio_capital = get_portfolio_capital()
+        current_balance   = get_demo_balance()
+        open_trades       = load_demo_trades("open")
+        closed_trades     = load_demo_trades("closed")
 
         total_unrealized = 0.0
         if open_trades and live_index > 0:
             for t in open_trades:
                 total_unrealized += sandbox_trade_pnl(t, live_index)
 
-        bal_color = "pos" if current_balance >= DEMO_INITIAL_BALANCE else "neg"
+        total_pnl_ils = current_balance - portfolio_capital
+        total_pnl_pct = total_pnl_ils / portfolio_capital * 100 if portfolio_capital else 0
+        bal_color = "pos" if total_pnl_ils >= 0 else "neg"
         unr_color = "pos" if total_unrealized >= 0 else "neg"
+        pct_str   = f"{total_pnl_pct:+.2f}%"
 
         render_metric_row(
-            _card("יתרת חשבון",   f"{current_balance:,.0f} ₪",    bal_color),
-            _card("P&L לא ממומש", fmt_ils(total_unrealized),       unr_color),
-            _card("פתוחות",       str(len(open_trades)),           "accent"),
-            _card("סגורות",       str(len(closed_trades)),         "primary"),
+            _card("הון מוקצה",    f"{portfolio_capital:,.0f} ₪",   "primary"),
+            _card("יתרה",         f"{current_balance:,.0f} ₪",     bal_color),
+            _card("P&L כולל",     f"{fmt_ils(total_pnl_ils)} ({pct_str})", bal_color),
+            _card("P&L לא ממומש", fmt_ils(total_unrealized),        unr_color),
+            _card("פתוחות",       str(len(open_trades)),            "accent"),
         )
+
+        # ── Portfolio settings ────────────────────────────────────────
+        with st.expander("⚙️ הגדרות תיק", expanded=False):
+            st.caption("הגדר את ההון שהקצית לאסטרטגיה. הנתון משמש לחישוב תשואה % ואינו משפיע על עסקאות קיימות.")
+            _cap_cols = st.columns([2, 1, 1])
+            with _cap_cols[0]:
+                new_capital = st.number_input(
+                    "הון מוקצה (₪)",
+                    min_value=1_000.0, max_value=10_000_000.0,
+                    value=float(portfolio_capital), step=10_000.0,
+                    format="%.0f", key="demo_capital_input",
+                    label_visibility="collapsed",
+                )
+            with _cap_cols[1]:
+                if st.button("💾 שמור הון", use_container_width=True,
+                             key="demo_save_capital"):
+                    if set_portfolio_capital(new_capital):
+                        get_portfolio_capital.clear()
+                        st.success(f"✅ הון מוקצה עודכן: {new_capital:,.0f} ₪")
+                        st.rerun()
+                    else:
+                        st.error("שמירה נכשלה")
+            with _cap_cols[2]:
+                if st.button("🔄 אפס יתרה להון", use_container_width=True,
+                             key="demo_reset_balance"):
+                    _update_demo_balance(new_capital, new_capital - current_balance,
+                                         "manual_reset")
+                    st.success(f"✅ יתרה אופסה ל-{new_capital:,.0f} ₪")
+                    st.rerun()
 
         # ── Open positions ──
         if open_trades:
