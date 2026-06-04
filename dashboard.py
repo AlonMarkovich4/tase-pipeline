@@ -1975,73 +1975,80 @@ elif nav_page == "🕹️ Demo Trading":
             if metrics.get("price_warning"):
                 st.warning(metrics["price_warning"])
 
-            st.markdown(
-                f'<div class="metric-grid">'
-                f'<div class="metric-card"><div class="label">Net Premium (pts)</div>'
-                f'<div class="value {prem_color}">{fmt_num(net_prem)}</div></div>'
-                f'<div class="metric-card"><div class="label">Max Profit</div>'
-                f'<div class="value green">{fmt_ils(max_profit)}</div></div>'
-                f'<div class="metric-card"><div class="label">Max Loss</div>'
-                f'<div class="value red">{fmt_ils(max_loss)}</div></div>'
-                f'<div class="metric-card"><div class="label">Breakeven(s)</div>'
-                f'<div class="value white" style="font-size:18px;">{be_str}</div></div>'
-                f'</div>',
-                unsafe_allow_html=True,
+            render_metric_row(
+                _card("Net Premium (pts)", fmt_num(net_prem),
+                      "pos" if net_prem > 0 else "neg"),
+                _card("Max Profit",  fmt_ils(max_profit), "pos"),
+                _card("Max Loss",    fmt_ils(max_loss),   "neg"),
+                _card("Breakeven(s)", be_str,             "primary"),
             )
 
-            # Build payoff chart
+            # ── Payoff chart (sandbox) — same token system as render_payoff_chart ──
             all_strikes = [l["strike"] for l in legs]
             min_s, max_s = min(all_strikes), max(all_strikes)
             margin = max(100, (max_s - min_s) * 0.8)
             x_range = np.linspace(min_s - margin, max_s + margin, 600)
             y_pnl = sandbox_compute_payoff(legs, x_range)
 
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=x_range, y=np.where(y_pnl >= 0, y_pnl, 0),
-                                     fill="tozeroy", fillcolor="rgba(38,222,129,0.45)",
-                                     line=dict(width=0), showlegend=False, hoverinfo="skip"))
-            fig.add_trace(go.Scatter(x=x_range, y=np.where(y_pnl < 0, y_pnl, 0),
-                                     fill="tozeroy", fillcolor="rgba(255,77,77,0.45)",
-                                     line=dict(width=0), showlegend=False, hoverinfo="skip"))
-            fig.add_trace(go.Scatter(x=x_range, y=y_pnl, mode="lines",
-                                     line=dict(color="rgba(255,255,255,0.4)", width=1.5),
-                                     showlegend=False,
-                                     hovertemplate="Index: %{x:,.0f}<br>P&L: %{y:,.0f} ₪<extra></extra>"))
-            fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.15)", width=1))
+            fig_sb = go.Figure()
+            fig_sb.add_trace(go.Scatter(
+                x=x_range, y=np.where(y_pnl >= 0, y_pnl, 0),
+                fill="tozeroy", fillcolor="rgba(52,168,83,0.18)",
+                line=dict(width=0), showlegend=False, hoverinfo="skip"))
+            fig_sb.add_trace(go.Scatter(
+                x=x_range, y=np.where(y_pnl < 0, y_pnl, 0),
+                fill="tozeroy", fillcolor="rgba(229,57,53,0.18)",
+                line=dict(width=0), showlegend=False, hoverinfo="skip"))
+            fig_sb.add_trace(go.Scatter(
+                x=x_range, y=y_pnl, mode="lines",
+                line=dict(color="rgba(255,255,255,0.25)", width=1),
+                showlegend=False,
+                hovertemplate="Index: %{x:,.0f}<br>P&L: %{y:,.0f} ₪<extra></extra>"))
+            fig_sb.add_hline(y=0, line=dict(color="rgba(255,255,255,0.10)", width=1))
             if be_list:
-                fig.add_trace(go.Scatter(
+                fig_sb.add_trace(go.Scatter(
                     x=be_list, y=[0] * len(be_list), mode="markers+text",
-                    marker=dict(color=C_ORANGE, size=11, symbol="circle",
-                                line=dict(color=C_BG, width=2)),
+                    marker=dict(color=T_WARN, size=8, symbol="circle",
+                                line=dict(color=T_BG, width=2)),
                     text=[f"BE: {b:,.0f}" for b in be_list],
-                    textposition="top center", textfont=dict(size=11, color=C_ORANGE),
-                    showlegend=False, hovertemplate="Breakeven: %{x:,.0f}<extra></extra>"))
+                    textposition="top center",
+                    textfont=dict(size=10, color=T_WARN, family="Inter"),
+                    showlegend=False,
+                    hovertemplate="Breakeven: %{x:,.0f}<extra></extra>"))
             if live_index > 0:
-                fig.add_vline(x=live_index, line=dict(color="#00BCD4", width=2, dash="dot"))
-                fig.add_annotation(x=live_index, y=max(y_pnl) * 0.85,
-                                   text=f"Live: {live_index:,.2f}", showarrow=False,
-                                   font=dict(size=12, color="#00BCD4"),
-                                   bgcolor="rgba(11,13,16,0.9)",
-                                   bordercolor="#00BCD4", borderwidth=1, borderpad=5)
+                fig_sb.add_vline(x=live_index,
+                                 line=dict(color=T_REF, width=1.5, dash="dot"))
+                fig_sb.add_annotation(
+                    x=live_index, y=max(y_pnl) * 0.85,
+                    text=f"Live: {live_index:,.2f}", showarrow=False,
+                    font=dict(size=12, color=T_REF, family="Inter"),
+                    bgcolor=T_BG, bordercolor=T_REF, borderwidth=1, borderpad=5)
             for leg in legs:
-                color = C_GREEN if leg["action"] == "BUY" else C_RED
-                label = f"{'B' if leg['action']=='BUY' else 'S'} {leg['type'][0]} {leg['strike']:,.0f}"
-                fig.add_vline(x=leg["strike"], line=dict(color=color, width=1, dash="dash"))
-                fig.add_annotation(x=leg["strike"], y=min(y_pnl) * 0.9, text=label,
-                                   showarrow=False, font=dict(size=10, color=color),
-                                   bgcolor="rgba(11,13,16,0.8)", borderpad=3)
-            fig.update_layout(
-                template="plotly_dark", paper_bgcolor=C_BG, plot_bgcolor=C_BG,
-                height=420, margin=dict(l=55, r=30, t=25, b=50),
-                xaxis=dict(title="TA-35 Index at Expiry", gridcolor="rgba(255,255,255,0.04)",
-                           zeroline=False, tickformat=",", tickfont=dict(size=10, color=C_DIM),
-                           title_font=dict(size=11, color=C_DIM)),
-                yaxis=dict(title="P&L (₪)", gridcolor="rgba(255,255,255,0.06)", zeroline=False,
-                           tickformat=",", tickfont=dict(size=10, color=C_DIM),
-                           title_font=dict(size=11, color=C_DIM)),
+                _lc = T_POS if leg["action"] == "BUY" else T_NEG
+                _ll = f"{'B' if leg['action']=='BUY' else 'S'} {leg['type'][0]} {leg['strike']:,.0f}"
+                fig_sb.add_vline(x=leg["strike"],
+                                 line=dict(color=_lc, width=1, dash="dash"))
+                fig_sb.add_annotation(
+                    x=leg["strike"], y=min(y_pnl) * 0.9, text=_ll,
+                    showarrow=False, font=dict(size=10, color=_lc, family="Inter"),
+                    bgcolor=T_BG, borderpad=3)
+            fig_sb.update_layout(
+                template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                height=380, margin=dict(l=52, r=16, t=8, b=40),
+                xaxis=dict(
+                    title="TA-35 Index at Expiry",
+                    gridcolor="rgba(255,255,255,0.05)", zeroline=False,
+                    tickformat=",", tickfont=dict(size=10, color=T_TEXT2),
+                    title_font=dict(size=11, color=T_TEXT2), showline=False),
+                yaxis=dict(
+                    title="P&L (₪)",
+                    gridcolor="rgba(255,255,255,0.05)", zeroline=False,
+                    tickformat=",", tickfont=dict(size=10, color=T_TEXT2),
+                    title_font=dict(size=11, color=T_TEXT2), showline=False),
                 showlegend=False, hovermode="x unified",
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig_sb, use_container_width=True)
 
             # ── Legs summary ──
             _lrows = []
@@ -2084,8 +2091,8 @@ elif nav_page == "🕹️ Demo Trading":
                     st.session_state.sandbox_template or "empty", {}).get("name", "Custom")
                 st.markdown(
                     f'<div style="padding:10px 0;text-align:center;">'
-                    f'<strong style="color:{C_TEXT};">{tpl_name}</strong>'
-                    f'<span style="color:{C_DIM};font-size:12px;"> | {len(legs)} רגליים</span>'
+                    f'<span style="color:{T_TEXT1};font-weight:500;">{tpl_name}</span>'
+                    f'<span style="color:{T_TEXT3};font-size:12px;"> · {len(legs)} רגליים</span>'
                     f'</div>', unsafe_allow_html=True)
             with exec_cols[2]:
                 if st.button("🚀 שגר אסטרטגיה לתיק דמו", key="sb_execute",
@@ -2113,12 +2120,11 @@ elif nav_page == "🕹️ Demo Trading":
             st.warning("הזן פרמיות (Premium) לפחות לרגל אחת כדי לראות את הגרף.")
         else:
             st.markdown(
-                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
-                f'padding:60px 20px;text-align:center;margin:20px 0;">'
-                f'<div style="font-size:48px;margin-bottom:12px;">📊</div>'
-                f'<div style="color:{C_TEXT};font-size:18px;font-weight:700;">הגרף יופיע כאן</div>'
-                f'<div style="color:{C_DIM};font-size:14px;margin-top:6px;">'
-                f'בחר תבנית אסטרטגיה למטה או הוסף רגליים מהשרשרת</div></div>',
+                '<div class="empty-state">'
+                '<div class="es-icon">📊</div>'
+                '<div class="es-title">הגרף יופיע כאן</div>'
+                '<div class="es-sub">בחר תבנית למטה או הוסף רגליים מהשרשרת</div>'
+                '</div>',
                 unsafe_allow_html=True)
 
         # ── Strategy Builder ──
@@ -2388,15 +2394,14 @@ elif nav_page == "🕹️ Demo Trading":
             for t in open_trades:
                 total_unrealized += sandbox_trade_pnl(t, live_index)
 
-        bal_color = "green" if current_balance >= DEMO_INITIAL_BALANCE else "red"
-        unr_color = "green" if total_unrealized >= 0 else "red"
-        unr_glow = ""
+        bal_color = "pos" if current_balance >= DEMO_INITIAL_BALANCE else "neg"
+        unr_color = "pos" if total_unrealized >= 0 else "neg"
 
         render_metric_row(
-            _card("יתרת חשבון", f"{current_balance:,.0f} ₪", bal_color),
-            _card("P&L לא ממומש", fmt_ils(total_unrealized), unr_color, unr_glow),
-            _card("פתוחות", str(len(open_trades)), "blue"),
-            _card("סגורות", str(len(closed_trades)), "white"),
+            _card("יתרת חשבון",   f"{current_balance:,.0f} ₪",    bal_color),
+            _card("P&L לא ממומש", fmt_ils(total_unrealized),       unr_color),
+            _card("פתוחות",       str(len(open_trades)),           "accent"),
+            _card("סגורות",       str(len(closed_trades)),         "primary"),
         )
 
         # ── Open positions ──
@@ -2411,18 +2416,23 @@ elif nav_page == "🕹️ Demo Trading":
                     t_legs = json.loads(t_legs)
                 t_max_profit = float(t.get("max_profit_ils", 0))
                 t_pnl = sandbox_trade_pnl(t, live_index) if live_index > 0 else 0.0
-                pnl_color = "green" if t_pnl >= 0 else "red"
+                pnl_color = "pos" if t_pnl >= 0 else "neg"
                 pnl_glow = ""
 
                 st.markdown(
-                    f'<div style="background:{C_CARD};border:1px solid {C_BORDER};border-radius:12px;'
-                    f'padding:16px 20px;margin:10px 0;">'
-                    f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">'
-                    f'<div><span style="color:{C_TEXT};font-weight:700;font-size:15px;">{t_name}</span>'
-                    f'<span style="color:{C_DIM};font-size:12px;margin-left:10px;">#{t_id}</span></div>'
-                    f'<div style="display:flex;gap:20px;align-items:center;">'
-                    f'<span style="color:{C_DIM};font-size:12px;">פקיעה: <strong style="color:{C_TEXT};">{t_expiry}</strong></span>'
-                    f'<span style="color:{C_DIM};font-size:12px;">כניסה: <strong style="color:{C_YELLOW};">{t_entry:,.0f}</strong></span>'
+                    f'<div style="background:var(--surface);border:1px solid var(--border);'
+                    f'border-radius:var(--r-md);padding:14px 16px;margin:10px 0;">'
+                    f'<div style="display:flex;justify-content:space-between;'
+                    f'align-items:center;flex-wrap:wrap;gap:8px;">'
+                    f'<div style="display:flex;align-items:baseline;gap:8px;">'
+                    f'<span style="color:{T_TEXT1};font-weight:500;font-size:14px;">{t_name}</span>'
+                    f'<span style="color:{T_TEXT3};font-size:12px;">#{t_id}</span></div>'
+                    f'<div style="display:flex;gap:16px;">'
+                    f'<span style="color:{T_TEXT2};font-size:12px;">פקיעה '
+                    f'<strong style="color:{T_TEXT1};">{t_expiry}</strong></span>'
+                    f'<span style="color:{T_TEXT2};font-size:12px;">כניסה '
+                    f'<strong style="color:{T_WARN};font-variant-numeric:tabular-nums;">'
+                    f'{t_entry:,.0f}</strong></span>'
                     f'</div></div></div>', unsafe_allow_html=True)
 
                 # Per-leg P&L table
@@ -2463,8 +2473,8 @@ elif nav_page == "🕹️ Demo Trading":
                 pnl_cols = st.columns([2, 1])
                 with pnl_cols[0]:
                     render_metric_row(
-                        _card("P&L לא ממומש", fmt_ils(t_pnl), pnl_color, pnl_glow),
-                        _card("Max Profit", fmt_ils(t_max_profit), "blue"),
+                        _card("P&L לא ממומש", fmt_ils(t_pnl),      pnl_color),
+                        _card("Max Profit",    fmt_ils(t_max_profit), "accent"),
                     )
                 with pnl_cols[1]:
                     if st.button(f"🔒 סגור #{t_id}", key=f"sb_close_{t_id}",
