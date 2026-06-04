@@ -1345,6 +1345,33 @@ def _apply_template(key: str, base_index: float, step: int = 20) -> list:
     ]
 
 
+def _enrich_legs_with_prices(legs: list, expiry_date: str) -> list:
+    """Fill premium_pts from the live option chain for the given expiry.
+    Only fills legs where premium_pts == 0; leaves non-zero values intact.
+    Returns the original list unchanged if chain data is unavailable."""
+    if not expiry_date or not legs:
+        return legs
+    chain = load_option_chain(expiry_date)
+    if chain.empty:
+        return legs
+    chain_strikes = chain["strike"].values
+    enriched = []
+    for leg in legs:
+        if float(leg.get("premium_pts", 0)) > 0:
+            enriched.append(leg)
+            continue
+        strike = float(leg.get("strike", 0))
+        side = "call" if leg["type"] == "Call" else "put"
+        prem_col = f"lastrate_{side}_pts"
+        if len(chain_strikes) == 0 or prem_col not in chain.columns:
+            enriched.append(leg)
+            continue
+        idx = int(abs(chain_strikes - strike).argmin())
+        price = float(chain.iloc[idx].get(prem_col, 0) or 0)
+        enriched.append({**leg, "premium_pts": price})
+    return enriched
+
+
 # ==================================================================
 # SESSION STATE
 # ==================================================================
@@ -2142,8 +2169,15 @@ elif nav_page == "🕹️ Demo Trading":
                 )
             with ctrl_cols[1]:
                 if st.button("📐 טען תבנית", use_container_width=True, key="sb_load_tpl"):
+                    _expiry_for_prices = (
+                        st.session_state.get("sb_chain_expiry")
+                        or next(iter(get_available_expiries()), None)
+                    )
+                    _new_legs = _apply_template(sel_tpl, base)
+                    if _expiry_for_prices:
+                        _new_legs = _enrich_legs_with_prices(_new_legs, _expiry_for_prices)
                     st.session_state.sandbox_template = sel_tpl
-                    st.session_state.sandbox_legs = _apply_template(sel_tpl, base)
+                    st.session_state.sandbox_legs = _new_legs
                     st.rerun()
             with ctrl_cols[2]:
                 if st.button("🧹 נקה", use_container_width=True, key="sb_clear"):
@@ -2197,9 +2231,17 @@ elif nav_page == "🕹️ Demo Trading":
             add_col, _, _ = st.columns([1, 1, 3])
             with add_col:
                 if st.button("➕ הוסף רגל", use_container_width=True, key="sb_add_leg"):
-                    st.session_state.sandbox_legs.append(
-                        {"type": "Call", "action": "BUY",
-                         "strike": round(base / 10) * 10, "premium_pts": 0.0, "qty": 1})
+                    _expiry_for_prices = (
+                        st.session_state.get("sb_chain_expiry")
+                        or next(iter(get_available_expiries()), None)
+                    )
+                    _new_leg = {"type": "Call", "action": "BUY",
+                                "strike": round(base / 10) * 10,
+                                "premium_pts": 0.0, "qty": 1}
+                    if _expiry_for_prices:
+                        _new_leg = _enrich_legs_with_prices(
+                            [_new_leg], _expiry_for_prices)[0]
+                    st.session_state.sandbox_legs.append(_new_leg)
                     st.rerun()
 
     # ================================================================
