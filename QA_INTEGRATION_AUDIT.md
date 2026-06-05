@@ -9,15 +9,17 @@
 
 ---
 
-## ⚠️ Blocking discrepancy (resolve before acting on any ₪ finding)
+## ✅ Multiplier resolved — = 50
 
-The agreed invariant in this mandate says **multiplier = 100**. The code says
-**`TASE_MULTIPLIER = 50`** (`config.py:41`), and earlier in this engagement the
-owner stated *"the multiplier will be 50."* These conflict. **Every ₪ figure in
-the system scales linearly with this constant.** This review verifies the
-structural invariant *"multiplier applied exactly once"* independent of the
-value, and records the value conflict as **Question for human #1**. I did not
-assume either value.
+The mandate's invariant said 100; the owner confirmed **50** (matching
+`config.py:41` `TASE_MULTIPLIER = 50`). The "100" in the brief was an error.
+Verified structural invariant holds: **the multiplier is applied exactly once**
+in the money path — ₪→points (`price = lastrate / MULT`) and points→₪
+(`max_profit = premium × MULT`) in the engine; the dashboard re-applies it only
+when converting distinct quantities (display ₪, live P&L, sandbox), never
+double-applying to an already-₪ stored value. The remaining concern is structural
+(C-INT-1: the dashboard's hard-coded `=50` fallback is a second source of truth
+that *happens* to match today), not the value itself.
 
 ---
 
@@ -219,8 +221,8 @@ H-INT-3 Yahoo settlement fallback, C-INT-1 multiplier fallback).
 
 ## 5. Questions for human
 
-1. **Multiplier = 50 or 100?** Code and an earlier instruction say 50; this
-   mandate's invariant says 100. Canonical value? (Blocks all ₪ correctness.)
+1. ~~**Multiplier = 50 or 100?**~~ **RESOLVED: 50** (owner confirmed; mandate's
+   "100" was an error). Structural "applied once" invariant verified.
 2. **H-INT-1:** Should the dashboard stop recomputing `max_profit_ils`/
    `max_risk_ils` and display the engine's stored values verbatim?
 3. **H-INT-2:** Should live unrealized P&L use the engine's traded-only curve
