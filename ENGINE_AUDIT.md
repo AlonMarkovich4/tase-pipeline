@@ -25,6 +25,33 @@ passes; the new suite under `tests/` supersedes and extends it.
 
 ---
 
+## Fix status (Step 2 — curve pricing + fixed wing)
+
+The 2026-06-05 production incident (duplicate / debit / over-wide-wing
+condors) was root-caused to **stale last-trade prices on illiquid long legs**
+(near-money shorts trade today → fresh; far-OTM longs don't → stale, inflated)
+combined with `baserate` being NULL. Per the owner's decisions
+(wing = 20 fixed, no debit allowed, keep all intervals, multiplier = 50, never
+delete data), `_calculate_condor` was rewritten:
+
+- **`_build_price_curve`** — prices every leg off a monotonic curve built only
+  from strikes that **traded today** (`dealsno > 0`, sane price), by linear
+  interpolation. Stale prices are ignored as anchors but **never deleted** from
+  the DB.
+- **Fixed wing** — long legs are exactly `short ± WING_WIDTH` (synthetic strikes
+  priced from the curve), so wings are always 20.
+- **No-arbitrage clamp** — a long leg can never cost more than the same-type
+  short, so each vertical's credit ≥ 0 ⇒ **net premium ≥ 0 (no debit, ever)**.
+- Pricing now happens at the **final** strikes (after the order guard), which
+  **also resolves C-1** (strike/price desync).
+
+**Status:** C-1 ✅ fixed · H-1 ✅ fixed (no debit) · C-2 ✅ fixed for new rows
+(symmetric 20 wing + premium ≤ wing ⇒ `max_loss_* ≤ 0`); historical asymmetric
+rows already in the DB retain the latent label nuance. Invariants locked by
+`test_prop_never_debit` and `test_prop_wing_always_fixed`.
+
+---
+
 ## Severity legend
 
 - **Critical** — produces a wrong money number that can be acted on, silently.

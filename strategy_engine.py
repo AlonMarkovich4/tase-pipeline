@@ -365,6 +365,67 @@ def _find_closest_option(rows: list, target_strike: float,
             "id": "", "deals": 0, "price_source": "none"}
 
 
+def _build_price_curve(rows: list, side: str):
+    """
+    Build a monotonic option-price curve from TODAY'S TRADED strikes only.
+
+    Why: illiquid strikes carry a stale last-trade price (from a prior day,
+    when the option was worth more). Using those stale prices for the long
+    (protective) legs produces impossible net debits and inverted spreads.
+    We anchor the curve only on strikes that traded today (dealsno > 0) with a
+    sane price, then read every leg's price off the curve by linear
+    interpolation. Untraded strikes get a clean, consistent, interpolated
+    price instead of a stale one.
+
+    Data is never mutated or deleted — we only choose which rows to trust as
+    anchors; all raw rows remain in the DB unchanged.
+
+    side: 'call' or 'put'
+    Returns: a callable price_at(strike)->float (points), or None when no
+             traded anchors exist (caller falls back to the matched price).
+    """
+    strike_col = f"expirationprice_{side}"
+    price_col  = f"lastrate_{side}"
+    deals_col  = f"dealsno_{side}"
+
+    anchors: dict = {}   # strike -> price (points); dedupe keeps the last seen
+    for row in rows:
+        strike = _clean_numeric(row.get(strike_col))
+        if strike <= 0:
+            continue
+        deals = int(_clean_numeric(row.get(deals_col)))
+        if deals <= 0:
+            continue
+        price = _clean_numeric(row.get(price_col)) / TASE_MULTIPLIER
+        if 0 < price <= PRICE_SANITY_MAX_PTS:
+            anchors[strike] = price
+
+    if not anchors:
+        return None
+
+    pts = sorted(anchors.items())            # [(strike, price), ...] ascending strike
+    strikes = [s for s, _ in pts]
+    prices  = [p for _, p in pts]
+
+    def price_at(strike: float) -> float:
+        # Flat extrapolation outside the traded range (conservative, monotone).
+        if strike <= strikes[0]:
+            return prices[0]
+        if strike >= strikes[-1]:
+            return prices[-1]
+        # Linear interpolation between the two bracketing traded anchors.
+        for i in range(1, len(strikes)):
+            s0, s1 = strikes[i - 1], strikes[i]
+            if s0 <= strike <= s1:
+                if s1 == s0:
+                    return prices[i - 1]
+                t = (strike - s0) / (s1 - s0)
+                return prices[i - 1] + t * (prices[i] - prices[i - 1])
+        return prices[-1]
+
+    return price_at
+
+
 def _calculate_condor(base_index: float, interval_pct: float,
                       rows_for_expiry: list, expiry_date: str,
                       trigger_date: str, trigger_time: str) -> dict:
@@ -386,37 +447,14 @@ def _calculate_condor(base_index: float, interval_pct: float,
     long_call_strike_target  = short_call_strike_target + WING_WIDTH
     long_put_strike_target   = short_put_strike_target  - WING_WIDTH
 
+    # ── 1. Short strikes: snap %-target to the nearest real (traded) strike ──
     short_call = _find_closest_option(rows_for_expiry, short_call_strike_target, "call")
     short_put  = _find_closest_option(rows_for_expiry, short_put_strike_target,  "put")
 
-    # Long legs must sit at least WING_WIDTH away from the *actual* matched
-    # short strikes — guarantees a wing of WING_WIDTH or wider even when the
-    # TASE chain is sparse (avoids degenerate 10-pt wings on tie-breaks).
-    long_call_floor   = short_call["strike"] + WING_WIDTH
-    long_put_ceil     = short_put["strike"]  - WING_WIDTH
-    long_call_target  = long_call_floor   # target the minimum-wing strike
-    long_put_target   = long_put_ceil
-
-    long_call  = _find_closest_option(rows_for_expiry, long_call_target, "call",
-                                      exclude_strikes={short_call["strike"]},
-                                      min_strike=long_call_floor)
-    long_put   = _find_closest_option(rows_for_expiry, long_put_target, "put",
-                                      exclude_strikes={short_put["strike"]},
-                                      max_strike=long_put_ceil)
-
-    # Convert matched strikes / prices to Decimal for all subsequent math
     sc_strike = _to_decimal(short_call["strike"])
     sp_strike = _to_decimal(short_put["strike"])
-    lc_strike = _to_decimal(long_call["strike"])
-    lp_strike = _to_decimal(long_put["strike"])
 
-    # _find_closest_option returns float prices; convert to Decimal for exact arithmetic
-    sc_price = short_call["price"] if isinstance(short_call["price"], Decimal) else _to_decimal(short_call["price"])
-    sp_price = short_put["price"]  if isinstance(short_put["price"],  Decimal) else _to_decimal(short_put["price"])
-    lc_price = long_call["price"]  if isinstance(long_call["price"],  Decimal) else _to_decimal(long_call["price"])
-    lp_price = long_put["price"]   if isinstance(long_put["price"],   Decimal) else _to_decimal(long_put["price"])
-
-    # ── Strike order validation ──────────────────────────────────────
+    # ── 2. Strike-order guard (run BEFORE pricing so prices match final strikes) ──
     if sp_strike >= sc_strike:
         logger.warning(
             "Invalid strike order: SP(%.0f) >= SC(%.0f) at %.1f%% — "
@@ -425,11 +463,54 @@ def _calculate_condor(base_index: float, interval_pct: float,
         sp_strike = BASE - offset
         sc_strike = BASE + offset
 
-    if lp_strike >= sp_strike:
-        lp_strike = sp_strike - WING
+    # ── 3. Long legs: EXACTLY WING_WIDTH from the short strikes (fixed wing) ──
+    lc_strike = sc_strike + WING
+    lp_strike = sp_strike - WING
 
-    if lc_strike <= sc_strike:
-        lc_strike = sc_strike + WING
+    # ── 4. Price every leg off a curve built from TODAY'S traded strikes ──
+    #    This eliminates stale last-trade prices on illiquid long legs (the
+    #    cause of impossible net debits). Falls back to the matched price only
+    #    when no strike traded today on that side.
+    call_curve = _build_price_curve(rows_for_expiry, "call")
+    put_curve  = _build_price_curve(rows_for_expiry, "put")
+
+    def _leg_price(curve, strike_d, matched) -> Decimal:
+        if curve is not None:
+            return _to_decimal(curve(float(strike_d)))
+        # Fallback: no traded anchors on this side — use the matcher's price.
+        mp = matched["price"]
+        return mp if isinstance(mp, Decimal) else _to_decimal(mp)
+
+    sc_price = _leg_price(call_curve, sc_strike, short_call)
+    sp_price = _leg_price(put_curve,  sp_strike, short_put)
+    lc_price = _leg_price(call_curve, lc_strike, short_call)
+    lp_price = _leg_price(put_curve,  lp_strike, short_put)
+
+    # ── 5. No-arbitrage clamp: a further-OTM long can never cost more than the
+    #    nearer-money short of the same type. Guarantees each vertical's credit
+    #    is >= 0, so the condor can never be a net debit.
+    if lc_price > sc_price:
+        lc_price = sc_price
+    if lp_price > sp_price:
+        lp_price = sp_price
+
+    # ── 6. Long-leg metadata (id / delta) — informational only. The long
+    #    strikes are synthetic (short ± WING); look them up exactly if listed,
+    #    otherwise report empty id / zero delta (honestly: no listed contract).
+    def _exact_meta(side: str, strike_d: Decimal) -> dict:
+        strike_col = f"expirationprice_{side}"
+        id_col     = f"derivativeid_{side}"
+        delta_col  = f"delta_{side}"
+        target     = float(strike_d)
+        for row in rows_for_expiry:
+            if _clean_numeric(row.get(strike_col)) == target:
+                return {"id": row.get(id_col, ""),
+                        "delta": _clean_numeric(row.get(delta_col)),
+                        "price_source": "curve"}
+        return {"id": "", "delta": 0.0, "price_source": "synthetic"}
+
+    long_call = _exact_meta("call", lc_strike)
+    long_put  = _exact_meta("put",  lp_strike)
 
     actual_wing_put  = sp_strike - lp_strike
     actual_wing_call = lc_strike - sc_strike

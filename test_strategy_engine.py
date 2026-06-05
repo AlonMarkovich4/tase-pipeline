@@ -159,26 +159,27 @@ def test_zero_premium_rr_guard():
 # ──────────────────────────────────────────────────────────────────────────────
 # TEST 3 — Negative premium (costs money to enter) is flagged correctly
 # ──────────────────────────────────────────────────────────────────────────────
-def test_negative_premium_flag():
+def test_no_debit_guarantee():
     """
-    Long legs priced higher than short legs → negative_premium flag.
-    The condor still returns a dict (no crash).
+    Was test_negative_premium_flag. After the curve-pricing + no-arbitrage
+    fix, inverted/stale long prices can no longer produce a net debit.
+    OLD: premium_flag='negative_premium', total_net_premium<0.
+    NEW: premium >= 0, no negative_premium flag.
     """
     rows = [
-        _row(1980, call_pts=0.10, put_pts=0.10),   # SP — low premium
+        _row(1980, call_pts=0.10, put_pts=0.10),
         _row(2000, call_pts=0.50, put_pts=0.50),
-        _row(2020, call_pts=0.10, put_pts=0.10),   # SC — low premium
-        _row(1960, call_pts=3.00, put_pts=3.00),   # LP — HIGH (inverted market)
-        _row(2040, call_pts=3.00, put_pts=3.00),   # LC — HIGH (inverted market)
+        _row(2020, call_pts=0.10, put_pts=0.10),
+        _row(1960, call_pts=3.00, put_pts=3.00),   # inverted "expensive" long
+        _row(2040, call_pts=3.00, put_pts=3.00),   # inverted "expensive" long
     ]
     r = se._calculate_condor(2000.0, 1.0, rows,
                               expiry_date="2026-06-06",
                               trigger_date="2026-06-02",
                               trigger_time="12:00")
-    assert r["premium_flag"] == "negative_premium", f"Flag: {r['premium_flag']}"
-    assert r["total_net_premium"] < 0,              f"Premium should be negative: {r['total_net_premium']}"
-    assert r["risk_reward_ratio"] == 0.0,           f"RR: {r['risk_reward_ratio']}"
-    print("PASS  test_negative_premium_flag")
+    assert r["total_net_premium"] >= 0,   f"Premium must be >= 0: {r['total_net_premium']}"
+    assert r["premium_flag"] != "negative_premium", f"Flag: {r['premium_flag']}"
+    print("PASS  test_no_debit_guarantee")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -346,7 +347,7 @@ if __name__ == "__main__":
 
     print()
     test_zero_premium_rr_guard()
-    test_negative_premium_flag()
+    test_no_debit_guarantee()
     test_tier_selection_live_over_stale()
     test_baserate_fallback()
     test_price_sanity_rejection()

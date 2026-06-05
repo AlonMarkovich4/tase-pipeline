@@ -117,3 +117,39 @@ def test_prop_rr_nonnegative(base, sc, sp):
     r = se._calculate_condor(float(base), 1.0, rows,
                              "2026-06-06", "2026-06-02", "12:00")
     assert r["risk_reward_ratio"] >= 0.0
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    base=st.integers(min_value=1500, max_value=5000),
+    pct=st.sampled_from([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]),
+    # arbitrary, possibly INVERTED leg prices — the no-arb clamp must still
+    # guarantee a non-negative credit (this is the core post-fix invariant).
+    sc=st.floats(min_value=0.01, max_value=20.0),
+    sp=st.floats(min_value=0.01, max_value=20.0),
+    lc=st.floats(min_value=0.01, max_value=20.0),
+    lp=st.floats(min_value=0.01, max_value=20.0),
+)
+def test_prop_never_debit(base, pct, sc, sp, lc, lp):
+    """Core fix invariant: the net premium is never negative, for ANY pricing —
+    including pathological inverted prices that previously produced debits."""
+    rows = _normal_chain(base, sc, sp, lc, lp)
+    r = se._calculate_condor(float(base), pct, rows,
+                             "2026-06-06", "2026-06-02", "12:00")
+    assert r["total_net_premium"] >= 0.0
+    assert r["max_profit_ils"]    >= 0.0
+    assert r["premium_flag"] != "negative_premium"
+
+
+@settings(max_examples=120, deadline=None)
+@given(
+    base=st.integers(min_value=1500, max_value=5000),
+    pct=st.sampled_from([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]),
+)
+def test_prop_wing_always_fixed(base, pct):
+    """Wing is always exactly WING_WIDTH on both sides (synthetic long legs)."""
+    rows = _normal_chain(base, 2.0, 2.0, 0.2, 0.2)
+    r = se._calculate_condor(float(base), pct, rows,
+                             "2026-06-06", "2026-06-02", "12:00")
+    assert r["actual_wing_put"]  == se.WING_WIDTH
+    assert r["actual_wing_call"] == se.WING_WIDTH

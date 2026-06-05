@@ -41,23 +41,37 @@ def test_premium_capped_to_wing():
     assert abs(r["total_net_premium"] - 20.0) < TOL
 
 
-# ── negative premium (debit) — H-1: numbers are currently nonsensical ─────
-def test_negative_premium_keeps_raw_numbers_BUG():
+# ── No-debit guarantee (FIXED — was H-1) ──────────────────────────────────
+def test_no_debit_with_stale_long_legs():
     """
-    LOCKS H-1 (audit): debit condor keeps a negative max_profit and
-    inflated max_risk. This is the CURRENT (buggy) behaviour.
+    Was H-1 (debit produced negative max_profit). NEW behaviour: curve pricing
+    + no-arbitrage clamp guarantee the net premium is never negative, even when
+    the (would-be) long legs carry inflated stale prices.
+
+    OLD: premium_flag='negative_premium', total_net_premium<0, max_profit<0.
+    NEW: premium >= 0, max_profit >= 0, no 'negative_premium' flag.
     """
     rows = [
-        make_row(1960, call_pts=0.10, put_pts=5.00),   # LP expensive
-        make_row(1980, call_pts=0.30, put_pts=0.10),   # SP cheap
-        make_row(2020, call_pts=0.10, put_pts=0.30),   # SC cheap
-        make_row(2040, call_pts=5.00, put_pts=0.10),   # LC expensive
+        make_row(1960, call_pts=0.10, put_pts=5.00),   # would-be LP "expensive"
+        make_row(1980, call_pts=0.30, put_pts=0.10),
+        make_row(2020, call_pts=0.10, put_pts=0.30),
+        make_row(2040, call_pts=5.00, put_pts=0.10),   # would-be LC "expensive"
     ]
     r = _calc(2000.0, 1.0, rows)
-    assert r["premium_flag"] == "negative_premium"
-    assert r["total_net_premium"] < 0        # negative credit
-    assert r["max_profit_ils"] < 0           # BUG: negative "max profit"
-    assert r["max_risk_ils"] > se.WING_WIDTH * se.TASE_MULTIPLIER  # BUG: risk > wing notional
+    assert r["total_net_premium"] >= 0
+    assert r["max_profit_ils"]    >= 0
+    assert r["premium_flag"] != "negative_premium"
+
+
+# ── Fixed wing: long legs are always exactly WING_WIDTH from the shorts ────
+def test_wing_is_exactly_wing_width():
+    rows = [make_row(s, call_pts=2.0, put_pts=2.0)
+            for s in range(1900, 2120, 20)]
+    r = _calc(2000.0, 1.0, rows)
+    assert r["actual_wing_put"]  == se.WING_WIDTH
+    assert r["actual_wing_call"] == se.WING_WIDTH
+    assert r["long_call_strike"] == r["short_call_strike"] + se.WING_WIDTH
+    assert r["long_put_strike"]  == r["short_put_strike"]  - se.WING_WIDTH
 
 
 # ── settlement exactly on a strike boundary ───────────────────────────────
