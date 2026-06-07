@@ -460,31 +460,12 @@ def load_strategies() -> pd.DataFrame:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
-    # ------------------------------------------------------------------
-    # POST-LOAD VALIDATION: enforce Iron Condor pricing invariants
-    # Premium can never exceed wing width — cap and flag corrupted rows
-    # ------------------------------------------------------------------
-    if "total_net_premium" in df.columns:
-        wing_p = df.get("actual_wing_put", pd.Series(WING_WIDTH, index=df.index))
-        wing_c = df.get("actual_wing_call", pd.Series(WING_WIDTH, index=df.index))
-        wing_p = wing_p.replace(0, WING_WIDTH)
-        wing_c = wing_c.replace(0, WING_WIDTH)
-        wing_max = pd.concat([wing_p, wing_c], axis=1).max(axis=1)
-
-        # Flag rows where premium > wing (impossible)
-        corrupted = df["total_net_premium"] > wing_max
-        if corrupted.any():
-            df.loc[corrupted, "premium_flag"] = "price_capped"
-            df.loc[corrupted, "total_net_premium"] = wing_max[corrupted]
-            # Recalculate profit/risk from corrected premium
-            df.loc[corrupted, "max_profit_ils"] = (
-                df.loc[corrupted, "total_net_premium"] * MULTIPLIER
-            )
-            df.loc[corrupted, "max_risk_ils"] = (
-                wing_max[corrupted] * MULTIPLIER
-                - df.loc[corrupted, "max_profit_ils"]
-            )
-
+    # NOTE (single source of truth): the dashboard no longer re-caps premium
+    # or recomputes max_profit_ils / max_risk_ils. The engine
+    # (_calculate_condor) now guarantees premium <= wing and stores the
+    # authoritative ₪ figures; recomputing here previously DISPLAYED numbers
+    # that differed from both the engine and the settled P&L for historical
+    # asymmetric-wing rows. The view layer now shows engine values verbatim.
     return df
 
 
@@ -1670,15 +1651,20 @@ if nav_page == "📈 ביצועים":
         render_section_header("🎯 התפלגות תוצאות")
         if "result_status" in settled_all.columns:
             _status_counts = settled_all["result_status"].fillna("unknown").value_counts()
+            # Engine result_status vocabulary (settle_expiry): max_profit,
+            # partial_loss_put/call, max_loss_put/call. Map all five so none
+            # falls back to the raw English string / grey colour.
             _STATUS_LABELS = {
-                "max_profit": "מקסימום רווח",
-                "partial":    "רווח חלקי",
-                "max_loss":   "הפסד מקסימלי",
-                "zero":       "אפס",
+                "max_profit":        "מקסימום רווח",
+                "partial_loss_put":  "הפסד חלקי (Put)",
+                "partial_loss_call": "הפסד חלקי (Call)",
+                "max_loss_put":      "הפסד מקס׳ (Put)",
+                "max_loss_call":     "הפסד מקס׳ (Call)",
             }
             _STATUS_COLORS = {
-                "max_profit": C_GREEN, "partial": C_BLUE,
-                "max_loss":   C_RED,   "zero":    C_DIM,
+                "max_profit":        C_GREEN,
+                "partial_loss_put":  C_YELLOW, "partial_loss_call": C_YELLOW,
+                "max_loss_put":      C_RED,    "max_loss_call":     C_RED,
             }
             _labels = [_STATUS_LABELS.get(s, s) for s in _status_counts.index]
             _colors = [_STATUS_COLORS.get(s, C_DIM) for s in _status_counts.index]
