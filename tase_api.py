@@ -234,9 +234,17 @@ def run_cycle(page, cycle_time: datetime) -> dict:
                             "DATA QUALITY CRITICAL [%s] expiry %s: %s",
                             w.code, exp_iso, w.detail,
                         )
-                        telegram_bot.alert_crash(
-                            f"Data Quality CRITICAL [{w.code}]\n{w.detail}"
-                        )
+                        # Throttle Telegram: at most ONE alert per code per day.
+                        # TASE serves a stale morning snapshot across all
+                        # expiries every 15-min cycle; without this the user
+                        # gets ~15 messages per cycle. The daily marker lives in
+                        # pipeline_state so it also survives worker restarts.
+                        dq_key = f"dq_alert:{w.code}:{date_str}"
+                        if not db.state_is_set(dq_key):
+                            telegram_bot.alert_crash(
+                                f"Data Quality CRITICAL [{w.code}]\n{w.detail}"
+                            )
+                            db.state_set(dq_key)
                 logger.error(
                     "   Skipping upsert for expiry %s — %d/%d items accepted "
                     "but CRITICAL quality issue(s) detected",
