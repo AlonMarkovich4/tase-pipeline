@@ -17,6 +17,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install Playwright Chromium browser
 RUN playwright install chromium
 
-COPY config.py main.py database.py strategy_engine.py telegram_bot.py ./
+# Copy ALL Python modules. main.py imports browser, health_server, tase_api,
+# which in turn import option_schema and supabase_client — the previous
+# explicit file list silently dropped these and crash-looped the worker
+# (ModuleNotFoundError: No module named 'browser'). Copying *.py keeps the
+# image resilient to future module additions.
+COPY *.py ./
 
 CMD ["python", "main.py"]
