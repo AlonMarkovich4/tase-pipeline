@@ -30,7 +30,10 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from config import TZ_ISRAEL, TRADING_DAYS, MARKET_OPEN, MARKET_CLOSE
+from config import (
+    TZ_ISRAEL, TRADING_DAYS, MARKET_OPEN, MARKET_CLOSE,
+    INTERVALS, WING_WIDTH,   # same constants _calculate_condor uses for its strike band
+)
 
 logger = logging.getLogger("tase_pipeline")
 
@@ -211,11 +214,10 @@ class OptionPair(BaseModel):
         rate = self.LastRate_Call
         if rate is not None and rate < 0:
             raise ValueError(f"Call LastRate is negative: {rate}")
-        if rate is not None and rate > _RATE_MAX:
-            raise ValueError(
-                f"Call LastRate {rate} exceeds ceiling {_RATE_MAX} — "
-                "likely a stale theoretical price"
-            )
+        # NOTE: the _RATE_MAX ceiling is NOT enforced here. A single over-ceiling
+        # leg (e.g. a legitimate deep-ITM option) must not reject the whole row
+        # and cascade to ITEMS_REJECTED. Ceiling handling is leg-level in
+        # _check_rate_ceiling(), which filters the leg and flags only near-money.
         delta = self.Delta_Call
         if delta is not None and not (0 <= delta <= 100):
             raise ValueError(f"Call delta {delta} outside [0, 100]")
@@ -232,11 +234,7 @@ class OptionPair(BaseModel):
         rate = self.LastRate_Put
         if rate is not None and rate < 0:
             raise ValueError(f"Put LastRate is negative: {rate}")
-        if rate is not None and rate > _RATE_MAX:
-            raise ValueError(
-                f"Put LastRate {rate} exceeds ceiling {_RATE_MAX} — "
-                "likely a stale theoretical price"
-            )
+        # See check_call_side: ceiling is handled leg-level in _check_rate_ceiling.
         delta = self.Delta_Put
         if delta is not None and not (0 <= delta <= 100):
             raise ValueError(f"Put delta {delta} outside [0, 100]")
@@ -336,6 +334,88 @@ def check_trade_date(
 # ------------------------------------------------------------------
 # Batch-level checks
 # ------------------------------------------------------------------
+
+def _engine_band_halfwidth(spot: Decimal) -> Decimal:
+    """Half-width (in index points) of the strike band the engine actually uses.
+
+    Anchored in the SAME config constants _calculate_condor reads — not a new
+    hard-coded percentage: the widest short strike is spot ± max(INTERVALS)%,
+    and the long wing extends WING_WIDTH beyond it.
+    """
+    max_pct = Decimal(str(max(INTERVALS)))
+    return spot * max_pct / Decimal("100") + Decimal(str(WING_WIDTH))
+
+
+def _set_leg_none(item: dict, base: str, suffix: str) -> None:
+    """Null a leg's last-rate under every casing present (e.g. LastRate_Call/_call)."""
+    for key in (f"{base}_{suffix}", f"{base}_{suffix.lower()}",
+                f"{base}_{suffix.capitalize()}"):
+        if key in item:
+            item[key] = None
+
+
+def _check_rate_ceiling(accepted: list[dict]) -> Optional[DataQualityWarning]:
+    """
+    Leg-level handling of the _RATE_MAX ceiling (Bug #4).
+
+    A leg whose LastRate exceeds the ceiling is NOT allowed to reject its row.
+    Instead the leg is nulled (its inflated price is not used) and classified:
+
+      * spot unknown (no UnderlingAsset injected) -> null + WARNING log. Without
+        spot the engine cannot run anyway; mass occurrences signal a broken
+        index fallback and must be visible, not swallowed.
+      * strike inside the engine's band (±max(INTERVALS)% + wing of spot)
+        -> this is exactly what the ceiling was meant to catch (a near-money
+        strike with an inflated price) -> null + emit a WARNING (flag).
+      * strike outside the band (deep-ITM) -> noise for the strategy -> null
+        silently; the row survives on its valid legs.
+
+    Mutates `accepted` in place (nulls offending legs). Returns a single
+    INFLATED_NEAR_MONEY warning if any near-money inflated leg was seen.
+    """
+    near_money = 0
+    deep_itm = 0
+    no_spot = 0
+
+    for item in accepted:
+        spot = _parse_number(_ci_get(item, "UnderlingAsset_Call")) \
+            or _parse_number(_ci_get(item, "UnderlingAsset_Put"))
+        spot_ok = spot is not None and _STRIKE_MIN <= spot <= _STRIKE_MAX
+        half = _engine_band_halfwidth(spot) if spot_ok else None
+
+        for suffix in ("Call", "Put"):
+            rate = _parse_number(_ci_get(item, f"LastRate_{suffix}"))
+            if rate is None or rate <= _RATE_MAX:
+                continue
+            strike = _parse_number(_ci_get(item, f"ExpirationPrice_{suffix}"))
+            _set_leg_none(item, "LastRate", suffix)   # never use the inflated value
+            if not spot_ok or strike is None:
+                no_spot += 1
+            elif abs(strike - spot) <= half:
+                near_money += 1
+            else:
+                deep_itm += 1
+
+    if no_spot:
+        logger.warning(
+            "Rate-ceiling: %d leg(s) over %s filtered with NO spot available "
+            "(UnderlyingAsset missing) — ceiling check skipped for those legs; "
+            "if frequent, the index fallback is broken", no_spot, _RATE_MAX)
+
+    if near_money:
+        return DataQualityWarning(
+            level=DQLevel.WARNING,
+            code="INFLATED_NEAR_MONEY",
+            count=near_money,
+            detail=(
+                f"{near_money} near-money leg(s) priced above {_RATE_MAX} "
+                f"(within the engine's ±{max(INTERVALS)}%+wing band) — inflated/"
+                f"theoretical price filtered. ({deep_itm} deep-ITM legs filtered "
+                f"silently as noise.)"
+            ),
+        )
+    return None
+
 
 def _check_zero_prices(accepted: list[dict]) -> Optional[DataQualityWarning]:
     """Warn if an unusually high fraction of items have zero call AND put prices."""
@@ -461,7 +541,9 @@ def validate_items(
         ))
 
     # 3. Batch-level checks (run on accepted items only)
-    for check_fn in (_check_zero_prices, _check_strike_diversity):
+    # _check_rate_ceiling runs FIRST: it nulls over-ceiling legs in place, so the
+    # zero/diversity checks below see the post-filter state.
+    for check_fn in (_check_rate_ceiling, _check_zero_prices, _check_strike_diversity):
         w = check_fn(accepted)
         if w:
             warnings.append(w)

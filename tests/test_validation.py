@@ -45,11 +45,18 @@ def test_negative_lastrate_rejected():
     assert res.rejected_count == 1
 
 
-# ── LastRate above ceiling rejected ───────────────────────────────────────
-def test_lastrate_above_ceiling_rejected():
-    res = validate_items([_item(lr_c="20000")], "2026-06-04",
-                         "04/06/2026", "2026-06-06")
-    assert res.rejected_count == 1
+# ── LastRate above ceiling: row SURVIVES, leg filtered (Bug #4 fix) ───────
+def test_lastrate_above_ceiling_leg_filtered_not_rejected():
+    """
+    Was: an over-ceiling leg rejected the whole row. Now the row survives and
+    only the offending leg is nulled (here: no spot in the fixture -> no-spot
+    filter path). Single-strike batch can't trigger DUPLICATE_STRIKES (>5 gate),
+    so we assert the row was NOT rejected and the inflated leg was nulled.
+    """
+    item = _item(lr_c="20000")
+    res = validate_items([item], "2026-06-04", "04/06/2026", "2026-06-06")
+    assert res.rejected_count == 0          # row no longer rejected
+    assert item.get("LastRate_Call") is None  # inflated leg filtered
 
 
 # ── Delta out of [0,100] rejected ─────────────────────────────────────────
@@ -82,7 +89,10 @@ def test_nan_lastrate_rejected():
 
 
 def test_inf_lastrate_rejected():
-    """Infinity LastRate rejected by the ceiling check (> _RATE_MAX)."""
+    """
+    Infinity LastRate is still rejected — now by Pydantic's non-finite Decimal
+    rule (not the ceiling, which is leg-level post-fix). Garbage stays out.
+    """
     res = validate_items([_item(lr_c="inf")], "2026-06-04",
                          "04/06/2026", "2026-06-06")
     assert res.rejected_count == 1
