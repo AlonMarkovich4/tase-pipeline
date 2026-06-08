@@ -262,21 +262,43 @@ def alert_daily_summary(date_str: str, cycles: int,
 # ------------------------------------------------------------------
 
 def alert_weekly_summary(week_stats: dict):
-    """Friday end-of-week summary."""
+    """Last-trading-day end-of-week summary.
+
+    Lists EVERY interval traded that week and its ₪ P&L, plus the weekly
+    total, win-rate, and the best/worst interval.
+    """
     trades = week_stats.get("trades", 0)
     wins = week_stats.get("wins", 0)
     losses = trades - wins
     wr = (wins / trades * 100) if trades > 0 else 0
+    total_pnl = week_stats.get("total_pnl", 0)
     best_interval = week_stats.get("best_interval", 0)
     worst_interval = week_stats.get("worst_interval", 0)
+    by_interval = week_stats.get("by_interval", {}) or {}
+
+    def _fmt_ils(v: float) -> str:
+        return f"+{v:,.0f}" if v > 0 else f"{v:,.0f}"
+
+    # Per-interval breakdown — one line per interval, ✅/❌ by sign.
+    lines = []
+    for pct, pnl in by_interval.items():
+        icon = "✅" if pnl > 0 else ("➖" if pnl == 0 else "❌")
+        lines.append(f"{icon} {float(pct):.1f}% | `{_fmt_ils(pnl)} ₪`")
+    breakdown = "\n".join(lines) if lines else "—"
+
+    total_icon = "\U0001F4C8" if total_pnl >= 0 else "\U0001F4C9"
 
     text = (
         f"\U0001F4CA *סיכום שבועי — TA-35*\n"
         f"━━━━━━━━━━━━━━━\n"
         f"\U0001F3AF הצלחה: `{wr:.0f}%`"
-        f" ({wins}W/{losses}L"
-        f" מתוך {trades})\n\n"
-        f"\U0001F3C6 מרווח מוביל: {best_interval}%\n"
-        f"\U0001F480 מרווח חלש: {worst_interval}%"
+        f" ({wins}W/{losses}L מתוך {trades})\n"
+        f"{total_icon} סה\"כ השבוע: `{_fmt_ils(total_pnl)} ₪`\n\n"
+        f"*לפי מרווח:*\n"
+        f"{breakdown}\n\n"
+        f"\U0001F3C6 מוביל: {float(best_interval):.1f}% "
+        f"(`{_fmt_ils(week_stats.get('best_pnl', 0))} ₪`)\n"
+        f"\U0001F480 חלש: {float(worst_interval):.1f}% "
+        f"(`{_fmt_ils(week_stats.get('worst_pnl', 0))} ₪`)"
     )
     send_message(text)

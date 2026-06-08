@@ -1110,4 +1110,7 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
         "best_pnl":       by_interval.get(best_interval, 0),
         "worst_interval": worst_interval,
         "worst_pnl":      by_interval.get(worst_interval, 0),
+        # Per-interval P&L for the week (₪), sorted by interval ascending —
+        # consumed by the weekly Telegram summary to list every interval.
+        "by_interval":    dict(sorted(by_interval.items())),
     }
