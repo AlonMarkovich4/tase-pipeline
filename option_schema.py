@@ -101,6 +101,25 @@ def _parse_number(v: Any) -> Optional[Decimal]:
         return None
 
 
+def _ci_get(item: dict, field: str) -> Any:
+    """
+    Read a field from a raw TASE item, case-insensitively.
+
+    TASE has shipped both CamelCase (``LastRate_Call``) and lowercase-suffix
+    (``LastRate_call``) key spellings across API versions. Reading by exact
+    case made the validation gate go blind on a casing change and reject every
+    cycle. Normalising on read means a future re-casing can never silence the
+    gate again.
+    """
+    if field in item:                       # fast path: exact match
+        return item[field]
+    target = field.lower()
+    for k, v in item.items():
+        if k.lower() == target:
+            return v
+    return None
+
+
 class OptionPair(BaseModel):
     """
     One put/call pair row as returned by the TASE API (raw CamelCase keys).
@@ -141,6 +160,29 @@ class OptionPair(BaseModel):
     # Underlying TA-35 index value at time of snapshot
     UnderlingAsset_Call: Optional[Decimal] = None
     UnderlingAsset_Put:  Optional[Decimal] = None
+
+    # ── Key-casing normalisation (runs first, on the raw dict) ──────────
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_key_casing(cls, data: Any) -> Any:
+        """Map case-insensitive incoming keys onto the model's field names.
+
+        TASE has used both ``LastRate_Call`` and ``LastRate_call``; lowercasing
+        both sides lets the model read either spelling. Original keys are kept
+        (extra='allow') so the DB layer's own key.lower() still sees everything.
+        """
+        if not isinstance(data, dict):
+            return data
+        lower_index: dict = {}
+        for k, v in data.items():
+            lower_index.setdefault(k.lower(), v)
+        out = dict(data)
+        for fname in cls.model_fields:
+            if fname not in out:
+                lk = fname.lower()
+                if lk in lower_index:
+                    out[fname] = lower_index[lk]
+        return out
 
     # ── Per-field coercion ──────────────────────────────────────────
     @field_validator(
@@ -299,10 +341,15 @@ def _check_zero_prices(accepted: list[dict]) -> Optional[DataQualityWarning]:
     """Warn if an unusually high fraction of items have zero call AND put prices."""
     if not accepted:
         return None
+
+    def _zero_or_missing(val) -> bool:
+        n = _parse_number(val)        # robust to None / "" / "0" / "0.0" / commas
+        return n is None or n == 0
+
     zero = sum(
         1 for item in accepted
-        if (not item.get("LastRate_Call") or item.get("LastRate_Call") == 0)
-        and (not item.get("LastRate_Put")  or item.get("LastRate_Put")  == 0)
+        if _zero_or_missing(_ci_get(item, "LastRate_Call"))
+        and _zero_or_missing(_ci_get(item, "LastRate_Put"))
     )
     pct = zero / len(accepted)
     if pct >= 1.0:
@@ -330,11 +377,11 @@ def _check_zero_prices(accepted: list[dict]) -> Optional[DataQualityWarning]:
 
 def _check_strike_diversity(accepted: list[dict]) -> Optional[DataQualityWarning]:
     """Warn if all call strikes are identical — indicates an API parse error."""
-    strikes = {
-        item.get("ExpirationPrice_Call")
-        for item in accepted
-        if item.get("ExpirationPrice_Call")
-    }
+    strikes = set()
+    for item in accepted:
+        s = _parse_number(_ci_get(item, "ExpirationPrice_Call"))
+        if s is not None:
+            strikes.add(s)
     if len(accepted) > 5 and len(strikes) <= 1:
         return DataQualityWarning(
             level=DQLevel.CRITICAL,

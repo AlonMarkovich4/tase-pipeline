@@ -96,21 +96,18 @@ def test_negative_baserate_accepted_BUG():
     assert res.accepted_count == 1   # BUG: negative baserate accepted
 
 
-# ── Batch gate: all-zero as STRINGS is MISSED (H-4 bug) ───────────────────
-def test_zero_price_gate_misses_string_zero_BUG():
+# ── Batch gate: all-zero as STRINGS is now CAUGHT (H-4 fixed) ─────────────
+def test_zero_price_gate_catches_string_zero():
     """
-    LOCKS H-4: prices arriving as the string "0" are NOT detected by
-    _check_zero_prices (truthiness bug). No ALL_PRICES_ZERO is emitted —
-    the dead-feed gate is inert for the common string representation.
-
-    Asserts specifically on the ALL_PRICES_ZERO code (not has_critical), since
-    a stale trade-date can independently raise a CRITICAL depending on the run
-    date — that must not mask what this test pins.
+    Was H-4 (string "0" prices slipped past the zero check via a truthiness
+    bug). The casing fix routed the zero check through _parse_number, so the
+    string "0" is now recognised as zero.
+    OLD: no ALL_PRICES_ZERO emitted. NEW: ALL_PRICES_ZERO fires.
     """
     items = [_item(lr_c="0", lr_p="0", strike_c=str(s), strike_p=str(s))
              for s in range(2000, 2120, 20)]
     res = validate_items(items, "2026-06-04", "04/06/2026", "2026-06-06")
-    assert not any(w.code == "ALL_PRICES_ZERO" for w in res.warnings)  # BUG
+    assert any(w.code == "ALL_PRICES_ZERO" for w in res.warnings)
 
 
 def test_zero_price_gate_fires_for_int_zero():
