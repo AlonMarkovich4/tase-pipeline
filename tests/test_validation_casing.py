@@ -38,7 +38,7 @@ def _full_item(strike, call_rate, put_rate, suffix):
         f"ExpirationPrice_{p}": str(strike),
         f"LastRate_{c}": str(call_rate),
         f"LastRate_{p}": str(put_rate),
-        f"Delta_{c}": "30", f"Delta_{p}": "30",
+        f"Delta_{c}": "30", f"Delta_{p}": "-30",   # put delta negative (TASE convention)
         f"ExpirationDate_{c}": "10/06/2026",
     }
 
@@ -85,21 +85,21 @@ def test_real_zeros_still_rejected():
 
 
 # ── 5. The real diag fixture (live problematic snapshot) is rejected ──────
-def test_diag_snapshot_rejected():
+def test_diag_snapshot_now_parses():
     """
-    The real captured snapshot mixes null near-money rows (new untraded series)
-    with deep-ITM rows whose prices exceed the sane ceiling. Pre-fix the model
-    was blind to the lowercase keys and accepted everything; post-fix it READS
-    the values and correctly rejects the bad rows — so the snapshot as a whole
-    is still rejected (safe), now for the right reasons.
+    End-state after the casing + ceiling + delta fixes: the real snapshot now
+    PARSES — nearly all rows accepted, only the strike=1 header row dropped, and
+    no parsing-driven CRITICAL (with a fresh trade-date). Today's only legitimate
+    block would be STALE_TRADE_DATE (data is genuinely Friday's), which is
+    isolated here by passing a fresh date.
     """
     data = json.load(open(os.path.join(_REPO, "diag_raw_response.json")))
     items = data.get("Items", [])
     assert items, "diag fixture should contain Items"
     res = _validate(items)
-    assert res.has_critical
-    codes = _codes(res)
-    assert "ITEMS_REJECTED" in codes or "ALL_PRICES_ZERO" in codes
+    assert res.accepted_count >= 28
+    crit = {w.code for w in res.warnings if w.level == osch.DQLevel.CRITICAL}
+    assert not crit                     # no parsing-driven CRITICAL any more
 
 
 # ── 6. Proof the model now READS lowercase values (not just stops ignoring) ─

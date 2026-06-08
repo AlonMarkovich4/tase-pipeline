@@ -10,7 +10,7 @@ from option_schema import OptionPair, validate_items, DQLevel
 
 
 def _item(strike_c="2100", strike_p="2100", lr_c="1.5", lr_p="1.5",
-          delta_c="30", delta_p="30", base_c=None, base_p=None):
+          delta_c="30", delta_p="-30", base_c=None, base_p=None):  # put delta is negative (TASE convention)
     d = {
         "ExpirationPrice_Call": strike_c,
         "ExpirationPrice_Put":  strike_p,
@@ -66,14 +66,15 @@ def test_delta_out_of_range_rejected():
     assert res.rejected_count == 1
 
 
-def test_negative_put_delta_rejected_BUG():
+def test_negative_put_delta_accepted():
     """
-    LOCKS M-3 (audit): a negative put delta (standard quant convention) is
-    currently REJECTED. If TASE ever sends signed deltas, all puts drop.
+    Was M-3: a negative put delta was wrongly rejected. TASE's convention is
+    Δput ∈ [-100, 0]; the fix accepts the signed value.
+    OLD: rejected_count == 1. NEW: accepted.
     """
     res = validate_items([_item(delta_p="-30")], "2026-06-04",
                          "04/06/2026", "2026-06-06")
-    assert res.rejected_count == 1
+    assert res.accepted_count == 1
 
 
 # ── NaN LastRate is correctly REJECTED by the schema (H-2 correction) ─────
@@ -124,7 +125,7 @@ def test_zero_price_gate_fires_for_int_zero():
     """Control: with numeric 0 the gate DOES fire — proving the type sensitivity."""
     items = [{"ExpirationPrice_Call": s, "ExpirationPrice_Put": s,
               "LastRate_Call": 0, "LastRate_Put": 0,
-              "Delta_Call": 30, "Delta_Put": 30}
+              "Delta_Call": 30, "Delta_Put": -30}
              for s in range(2000, 2120, 20)]
     res = validate_items(items, "2026-06-04", "04/06/2026", "2026-06-06")
     assert res.has_critical

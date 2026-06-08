@@ -236,8 +236,11 @@ class OptionPair(BaseModel):
             raise ValueError(f"Put LastRate is negative: {rate}")
         # See check_call_side: ceiling is handled leg-level in _check_rate_ceiling.
         delta = self.Delta_Put
-        if delta is not None and not (0 <= delta <= 100):
-            raise ValueError(f"Put delta {delta} outside [0, 100]")
+        # TASE put delta is NEGATIVE (signed convention), scale 0..100 →
+        # Δput ∈ [-100, 0]. Enforce the sign per-side (not |delta|) so a
+        # positive put delta (convention breach / mixed field) is rejected.
+        if delta is not None and not (-100 <= delta <= 0):
+            raise ValueError(f"Put delta {delta} outside [-100, 0]")
         return self
 
     @model_validator(mode="after")

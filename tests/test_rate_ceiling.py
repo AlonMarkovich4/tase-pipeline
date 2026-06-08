@@ -36,7 +36,7 @@ def _item(strike, lr_call, lr_put, spot=None):
         "rowType": "001", "drvType": "04",
         "ExpirationPrice_Call": str(strike), "ExpirationPrice_Put": str(strike),
         "LastRate_Call": str(lr_call), "LastRate_Put": str(lr_put),
-        "Delta_Call": "30", "Delta_Put": "30",
+        "Delta_Call": "30", "Delta_Put": "-30",   # put delta negative (TASE convention)
     }
     if spot is not None:
         d["UnderlingAsset_Call"] = str(spot)
@@ -57,21 +57,36 @@ def test_deep_itm_chain_survives():
     assert all(it.get("LastRate_Call") is None for it in items)  # legs filtered
 
 
-# ── 1b. The real diag is STILL blocked — but by M-3 (negative put delta),
-#        NOT by the ceiling. Proves #4 is fixed and surfaces the next bug.
-def test_diag_residual_block_is_delta_sign_not_ceiling_M3():
+# ── 1b. After #4 AND #5: the diag passes validation (only the strike=1 header
+#        row is dropped). Neither the ceiling nor the put-delta sign blocks now.
+def test_diag_passes_after_ceiling_and_delta_fixes():
     items = _diag_items()
-    res = _validate(items)
-    assert res.rejected_count > 10        # still heavily rejected (M-3, separate bug)
-    # Collect ALL rejection reasons across the snapshot.
+    res = osch.validate_items(items, "2026-06-08", "08/06/2026", "2026-06-10")  # fresh date
+    assert res.accepted_count >= 28      # was 1/31; now ~30/31
+    crit = {w.code for w in res.warnings if w.level == osch.DQLevel.CRITICAL}
+    assert "ITEMS_REJECTED" not in crit  # dropped from CRITICAL(97%) to WARNING(3%)
+    # neither ceiling nor delta is a rejection reason any more
     reasons = []
     for it in items:
         try:
             osch.OptionPair.model_validate(it)
         except Exception as e:
             reasons.append(str(e).lower())
-    assert not any("ceiling" in r for r in reasons)   # #4 fixed: ceiling never raises now
-    assert any("delta" in r for r in reasons)         # residual blocker = negative put delta (M-3)
+    assert not any("ceiling" in r for r in reasons)
+    assert not any("delta" in r for r in reasons)
+
+
+def test_diag_delta_parity_sanity():
+    """Documents the convention: |Δcall| + |Δput| ≈ 100 across the diag."""
+    items = _diag_items()
+    checked = 0
+    for it in items:
+        dc = osch._parse_number(it.get("Delta_call"))
+        dp = osch._parse_number(it.get("Delta_put"))
+        if dc is not None and dp is not None and (dc != 0 or dp != 0):
+            assert abs(abs(dc) + abs(dp) - 100) <= 1   # parity within 1 pt
+            checked += 1
+    assert checked >= 10
 
 
 # ── 2. Deep-ITM over-ceiling leg is filtered silently; row survives ───────
