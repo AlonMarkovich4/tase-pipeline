@@ -2297,165 +2297,165 @@ elif nav_page == "🕹️ Demo Trading":
                 f'</div>', unsafe_allow_html=True)
         else:
             chain_header = st.columns([2, 1, 1])
-        with chain_header[1]:
-            sel_expiry = st.selectbox("📅 פקיעה", expiry_dates, index=0,
-                                      key="sb_chain_expiry")
-        with chain_header[2]:
-            show_all_chain = st.toggle("הצג את כל ה-strikes",
-                                       value=False, key="sb_chain_show_all")
-        chain_df = load_option_chain(sel_expiry)
+            with chain_header[1]:
+                sel_expiry = st.selectbox("📅 פקיעה", expiry_dates, index=0,
+                                          key="sb_chain_expiry")
+            with chain_header[2]:
+                show_all_chain = st.toggle("הצג את כל ה-strikes",
+                                           value=False, key="sb_chain_show_all")
+            chain_df = load_option_chain(sel_expiry)
 
-        if chain_df.empty:
-            st.warning("אין נתוני שרשרת לתאריך הפקיעה שנבחר.")
-        else:
-            CHAIN_WINDOW = 8  # strikes each side of ATM (focused default)
-            if live_index > 0:
-                atm_pos = int((chain_df["strike"] - live_index).abs().argsort().iloc[0])
-                atm_strike = chain_df.iloc[atm_pos]["strike"]
+            if chain_df.empty:
+                st.warning("אין נתוני שרשרת לתאריך הפקיעה שנבחר.")
             else:
-                atm_pos = len(chain_df) // 2
-                atm_strike = 0
+                CHAIN_WINDOW = 8  # strikes each side of ATM (focused default)
+                if live_index > 0:
+                    atm_pos = int((chain_df["strike"] - live_index).abs().argsort().iloc[0])
+                    atm_strike = chain_df.iloc[atm_pos]["strike"]
+                else:
+                    atm_pos = len(chain_df) // 2
+                    atm_strike = 0
 
-            if show_all_chain:
-                display_df = chain_df.copy()
-            else:
-                lo = max(0, atm_pos - CHAIN_WINDOW)
-                hi = min(len(chain_df), atm_pos + CHAIN_WINDOW + 1)
-                display_df = chain_df.iloc[lo:hi].copy()
+                if show_all_chain:
+                    display_df = chain_df.copy()
+                else:
+                    lo = max(0, atm_pos - CHAIN_WINDOW)
+                    hi = min(len(chain_df), atm_pos + CHAIN_WINDOW + 1)
+                    display_df = chain_df.iloc[lo:hi].copy()
 
-            if display_df.empty:
-                display_df = chain_df.copy()
+                if display_df.empty:
+                    display_df = chain_df.copy()
 
-            with chain_header[0]:
-                n_strikes = len(display_df)
-                scope = "הכל" if show_all_chain else f"ATM ±{CHAIN_WINDOW}"
-                st.markdown(
-                    f'<span style="color:{T_TEXT3};font-size:12px;">'
-                    f'{n_strikes} strikes ({scope})  |  פקיעה: {sel_expiry}'
-                    f'{"  |  ATM ≈ " + fmt_num(atm_strike, 0) if atm_strike > 0 else ""}'
-                    f'</span>', unsafe_allow_html=True)
+                with chain_header[0]:
+                    n_strikes = len(display_df)
+                    scope = "הכל" if show_all_chain else f"ATM ±{CHAIN_WINDOW}"
+                    st.markdown(
+                        f'<span style="color:{T_TEXT3};font-size:12px;">'
+                        f'{n_strikes} strikes ({scope})  |  פקיעה: {sel_expiry}'
+                        f'{"  |  ATM ≈ " + fmt_num(atm_strike, 0) if atm_strike > 0 else ""}'
+                        f'</span>', unsafe_allow_html=True)
 
-            # Build chain HTML
-            chain_html = (
-                '<div class="chain-wrap"><table><thead><tr>'
-                '<th class="call-hdr">OI</th>'
-                '<th class="call-hdr">Vol</th>'
-                '<th class="call-hdr">Delta</th>'
-                '<th class="call-hdr">Premium ₪</th>'
-                '<th class="strike-hdr">⚡ STRIKE</th>'
-                '<th class="put-hdr">Premium ₪</th>'
-                '<th class="put-hdr">Delta</th>'
-                '<th class="put-hdr">Vol</th>'
-                '<th class="put-hdr">OI</th>'
-                '</tr></thead><tbody>'
-            )
-            for _, row in display_df.iterrows():
-                strike = int(row["strike"])
-                c_rate = row.get("lastrate_call", 0) or 0
-                p_rate = row.get("lastrate_put", 0) or 0
-                c_delta = int(row.get("delta_call", 0) or 0)
-                p_delta = int(row.get("delta_put", 0) or 0)
-                c_oi = int(row.get("openpositions_call", 0) or 0)
-                p_oi = int(row.get("openpositions_put", 0) or 0)
-                c_vol = int(row.get("dealsno_call", 0) or 0)
-                p_vol = int(row.get("dealsno_put", 0) or 0)
-
-                is_atm = (atm_strike > 0 and strike == atm_strike)
-                call_itm = "itm" if (live_index > 0 and strike < live_index) else ""
-                put_itm = "itm" if (live_index > 0 and strike > live_index) else ""
-                row_class = ' class="atm-row"' if is_atm else ""
-
-                nd = '<span class="no-data">—</span>'
-                c_rate_s = f"{c_rate:,.0f}" if c_rate > 0 else nd
-                p_rate_s = f"{p_rate:,.0f}" if p_rate > 0 else nd
-                c_delta_s = f'{c_delta}' if c_delta else nd
-                p_delta_s = f'{p_delta}' if p_delta else nd
-                c_oi_s = f'{c_oi:,}' if c_oi > 0 else nd
-                p_oi_s = f'{p_oi:,}' if p_oi > 0 else nd
-                c_vol_s = f'{c_vol}' if c_vol > 0 else nd
-                p_vol_s = f'{p_vol}' if p_vol > 0 else nd
-
-                chain_html += (
-                    f'<tr{row_class}>'
-                    f'<td class="{call_itm} oi">{c_oi_s}</td>'
-                    f'<td class="{call_itm}">{c_vol_s}</td>'
-                    f'<td class="{call_itm} delta">{c_delta_s}</td>'
-                    f'<td class="{call_itm}">{c_rate_s}</td>'
-                    f'<td class="strike-col">{strike:,}</td>'
-                    f'<td class="{put_itm}">{p_rate_s}</td>'
-                    f'<td class="{put_itm} delta">{p_delta_s}</td>'
-                    f'<td class="{put_itm}">{p_vol_s}</td>'
-                    f'<td class="{put_itm} oi">{p_oi_s}</td>'
-                    f'</tr>'
+                # Build chain HTML
+                chain_html = (
+                    '<div class="chain-wrap"><table><thead><tr>'
+                    '<th class="call-hdr">OI</th>'
+                    '<th class="call-hdr">Vol</th>'
+                    '<th class="call-hdr">Delta</th>'
+                    '<th class="call-hdr">Premium ₪</th>'
+                    '<th class="strike-hdr">⚡ STRIKE</th>'
+                    '<th class="put-hdr">Premium ₪</th>'
+                    '<th class="put-hdr">Delta</th>'
+                    '<th class="put-hdr">Vol</th>'
+                    '<th class="put-hdr">OI</th>'
+                    '</tr></thead><tbody>'
                 )
-            chain_html += '</tbody></table></div>'
-            st.markdown(chain_html, unsafe_allow_html=True)
+                for _, row in display_df.iterrows():
+                    strike = int(row["strike"])
+                    c_rate = row.get("lastrate_call", 0) or 0
+                    p_rate = row.get("lastrate_put", 0) or 0
+                    c_delta = int(row.get("delta_call", 0) or 0)
+                    p_delta = int(row.get("delta_put", 0) or 0)
+                    c_oi = int(row.get("openpositions_call", 0) or 0)
+                    p_oi = int(row.get("openpositions_put", 0) or 0)
+                    c_vol = int(row.get("dealsno_call", 0) or 0)
+                    p_vol = int(row.get("dealsno_put", 0) or 0)
 
-            # ── IV Proxy — compact stat row below chain ──────────────
-            if atm_strike > 0 and "baserate_call_pts" in chain_df.columns:
-                _atm_row = chain_df[chain_df["strike"] == atm_strike]
-                if not _atm_row.empty:
-                    _atm = _atm_row.iloc[0]
-                    _bc_pts = float(_atm.get("baserate_call_pts", 0) or 0)
-                    _bp_pts = float(_atm.get("baserate_put_pts", 0) or 0)
-                    _lc_pts = float(_atm.get("lastrate_call_pts", 0) or 0)
-                    _lp_pts = float(_atm.get("lastrate_put_pts", 0) or 0)
-                    if _bc_pts > 0 or _bp_pts > 0:
-                        _iv_c = _lc_pts - _bc_pts
-                        _iv_p = _lp_pts - _bp_pts
-                        _ivc_col = T_POS if _iv_c > 0 else (T_NEG if _iv_c < 0 else T_TEXT2)
-                        _ivp_col = T_POS if _iv_p > 0 else (T_NEG if _iv_p < 0 else T_TEXT2)
-                        _c_str = (f'<span style="color:{_ivc_col};font-variant-numeric:tabular-nums;">'
-                                  f'{_iv_c:+.2f} pts</span>' if _bc_pts > 0 else
-                                  f'<span style="color:{T_TEXT3};">N/A</span>')
-                        _p_str = (f'<span style="color:{_ivp_col};font-variant-numeric:tabular-nums;">'
-                                  f'{_iv_p:+.2f} pts</span>' if _bp_pts > 0 else
-                                  f'<span style="color:{T_TEXT3};">N/A</span>')
-                        st.markdown(
-                            f'<div style="display:flex;align-items:center;gap:16px;'
-                            f'padding:6px 0;font-size:12px;color:{T_TEXT2};direction:ltr;">'
-                            f'<span style="color:{T_TEXT3};">IV Proxy @ ATM {atm_strike:,.0f}</span>'
-                            f'<span>Call {_c_str}</span>'
-                            f'<span>Put {_p_str}</span>'
-                            f'<span style="color:{T_TEXT3};font-size:11px;">(שוק − תיאורטי)</span>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
+                    is_atm = (atm_strike > 0 and strike == atm_strike)
+                    call_itm = "itm" if (live_index > 0 and strike < live_index) else ""
+                    put_itm = "itm" if (live_index > 0 and strike > live_index) else ""
+                    row_class = ' class="atm-row"' if is_atm else ""
 
-            # ── Add to Sandbox widget ──
-            st.markdown(
-                f'<div style="color:{T_TEXT3};font-size:12px;margin:8px 0 4px;direction:rtl;">'
-                f'➕ הוסף אופציה לגרף:</div>', unsafe_allow_html=True)
+                    nd = '<span class="no-data">—</span>'
+                    c_rate_s = f"{c_rate:,.0f}" if c_rate > 0 else nd
+                    p_rate_s = f"{p_rate:,.0f}" if p_rate > 0 else nd
+                    c_delta_s = f'{c_delta}' if c_delta else nd
+                    p_delta_s = f'{p_delta}' if p_delta else nd
+                    c_oi_s = f'{c_oi:,}' if c_oi > 0 else nd
+                    p_oi_s = f'{p_oi:,}' if p_oi > 0 else nd
+                    c_vol_s = f'{c_vol}' if c_vol > 0 else nd
+                    p_vol_s = f'{p_vol}' if p_vol > 0 else nd
 
-            add_cols = st.columns([1.5, 1.2, 1.2, 1.2, 1.5])
-            with add_cols[0]:
-                add_strike = st.selectbox("Strike",
-                                          [int(s) for s in display_df["strike"].unique()],
-                                          index=len(display_df) // 2,
-                                          key="sb_add_strike", label_visibility="collapsed")
-            with add_cols[1]:
-                add_type = st.selectbox("Type", ["Call", "Put"],
-                                        key="sb_add_type", label_visibility="collapsed")
-            with add_cols[2]:
-                add_action = st.selectbox("Action", ["BUY", "SELL"],
-                                          key="sb_add_action", label_visibility="collapsed")
+                    chain_html += (
+                        f'<tr{row_class}>'
+                        f'<td class="{call_itm} oi">{c_oi_s}</td>'
+                        f'<td class="{call_itm}">{c_vol_s}</td>'
+                        f'<td class="{call_itm} delta">{c_delta_s}</td>'
+                        f'<td class="{call_itm}">{c_rate_s}</td>'
+                        f'<td class="strike-col">{strike:,}</td>'
+                        f'<td class="{put_itm}">{p_rate_s}</td>'
+                        f'<td class="{put_itm} delta">{p_delta_s}</td>'
+                        f'<td class="{put_itm}">{p_vol_s}</td>'
+                        f'<td class="{put_itm} oi">{p_oi_s}</td>'
+                        f'</tr>'
+                    )
+                chain_html += '</tbody></table></div>'
+                st.markdown(chain_html, unsafe_allow_html=True)
 
-            match_row = display_df[display_df["strike"] == add_strike]
-            auto_prem = 0.0
-            if not match_row.empty:
-                auto_prem = float(match_row.iloc[0].get(
-                    f"lastrate_{add_type.lower()}_pts", 0) or 0)
+                # ── IV Proxy — compact stat row below chain ──────────────
+                if atm_strike > 0 and "baserate_call_pts" in chain_df.columns:
+                    _atm_row = chain_df[chain_df["strike"] == atm_strike]
+                    if not _atm_row.empty:
+                        _atm = _atm_row.iloc[0]
+                        _bc_pts = float(_atm.get("baserate_call_pts", 0) or 0)
+                        _bp_pts = float(_atm.get("baserate_put_pts", 0) or 0)
+                        _lc_pts = float(_atm.get("lastrate_call_pts", 0) or 0)
+                        _lp_pts = float(_atm.get("lastrate_put_pts", 0) or 0)
+                        if _bc_pts > 0 or _bp_pts > 0:
+                            _iv_c = _lc_pts - _bc_pts
+                            _iv_p = _lp_pts - _bp_pts
+                            _ivc_col = T_POS if _iv_c > 0 else (T_NEG if _iv_c < 0 else T_TEXT2)
+                            _ivp_col = T_POS if _iv_p > 0 else (T_NEG if _iv_p < 0 else T_TEXT2)
+                            _c_str = (f'<span style="color:{_ivc_col};font-variant-numeric:tabular-nums;">'
+                                      f'{_iv_c:+.2f} pts</span>' if _bc_pts > 0 else
+                                      f'<span style="color:{T_TEXT3};">N/A</span>')
+                            _p_str = (f'<span style="color:{_ivp_col};font-variant-numeric:tabular-nums;">'
+                                      f'{_iv_p:+.2f} pts</span>' if _bp_pts > 0 else
+                                      f'<span style="color:{T_TEXT3};">N/A</span>')
+                            st.markdown(
+                                f'<div style="display:flex;align-items:center;gap:16px;'
+                                f'padding:6px 0;font-size:12px;color:{T_TEXT2};direction:ltr;">'
+                                f'<span style="color:{T_TEXT3};">IV Proxy @ ATM {atm_strike:,.0f}</span>'
+                                f'<span>Call {_c_str}</span>'
+                                f'<span>Put {_p_str}</span>'
+                                f'<span style="color:{T_TEXT3};font-size:11px;">(שוק − תיאורטי)</span>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
 
-            with add_cols[3]:
+                # ── Add to Sandbox widget ──
                 st.markdown(
-                    f'<div style="padding:8px 0;text-align:center;color:{T_TEXT2};font-size:13px;">'
-                    f'{fmt_num(auto_prem)} pts</div>', unsafe_allow_html=True)
-            with add_cols[4]:
-                if st.button("➕ הוסף לגרף", key="sb_chain_add", use_container_width=True):
-                    st.session_state.sandbox_legs.append(
-                        {"type": add_type, "action": add_action,
-                         "strike": float(add_strike), "premium_pts": auto_prem, "qty": 1})
-                    st.rerun()
+                    f'<div style="color:{T_TEXT3};font-size:12px;margin:8px 0 4px;direction:rtl;">'
+                    f'➕ הוסף אופציה לגרף:</div>', unsafe_allow_html=True)
+
+                add_cols = st.columns([1.5, 1.2, 1.2, 1.2, 1.5])
+                with add_cols[0]:
+                    add_strike = st.selectbox("Strike",
+                                              [int(s) for s in display_df["strike"].unique()],
+                                              index=len(display_df) // 2,
+                                              key="sb_add_strike", label_visibility="collapsed")
+                with add_cols[1]:
+                    add_type = st.selectbox("Type", ["Call", "Put"],
+                                            key="sb_add_type", label_visibility="collapsed")
+                with add_cols[2]:
+                    add_action = st.selectbox("Action", ["BUY", "SELL"],
+                                              key="sb_add_action", label_visibility="collapsed")
+
+                match_row = display_df[display_df["strike"] == add_strike]
+                auto_prem = 0.0
+                if not match_row.empty:
+                    auto_prem = float(match_row.iloc[0].get(
+                        f"lastrate_{add_type.lower()}_pts", 0) or 0)
+
+                with add_cols[3]:
+                    st.markdown(
+                        f'<div style="padding:8px 0;text-align:center;color:{T_TEXT2};font-size:13px;">'
+                        f'{fmt_num(auto_prem)} pts</div>', unsafe_allow_html=True)
+                with add_cols[4]:
+                    if st.button("➕ הוסף לגרף", key="sb_chain_add", use_container_width=True):
+                        st.session_state.sandbox_legs.append(
+                            {"type": add_type, "action": add_action,
+                             "strike": float(add_strike), "premium_pts": auto_prem, "qty": 1})
+                        st.rerun()
 
     # ================================================================
     # § TAB 3 — Demo Portfolio & Real-Time P&L
