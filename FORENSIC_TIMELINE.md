@@ -102,3 +102,38 @@ Resolve via an afternoon re-probe of `dType=1`.
 - **Not yet verified** against a live *traded* snapshot (`DealsNo>0` intraday),
   because none has been available during the incident window — every capture so
   far is the previous day's EOD.
+
+---
+
+## Resolution log (post-incident)
+
+- **STALE_TRADE_DATE** (was "still open"): RESOLVED 2026-06-09 — the feed is a
+  T-1 EOD source by nature; staleness is now measured in trading days and T-1
+  is accepted. See commit `d90c5f3`.
+- **Contract multiplier = 50**: locked with a regression test suite
+  (`tests/test_multiplier_lock.py`), commit `47643c1`.
+- **Live end-to-end (2026-06-09)**: a manual `run_strategy()` on the live
+  09/06 data produced 24 clean Iron Condors (3 expiries × 8 intervals, spot
+  4258.35) — all credit (net > 0), wings exactly 20, max_profit > 0, breakevens
+  wrapping spot, ₪ = points × 50. The pre-fix garbage (debit / 260-pt wings) is
+  gone from new output.
+- **Historical garbage** (pre-fix strategies, e.g. ids 90–98, 04–05/06): marked
+  `is_valid = false` (kept for history, filtered from the active dashboard +
+  analytics view). NOT deleted.
+
+---
+
+## Known loose threads (documented, not yet addressed)
+
+1. **Duplicate intervals on sparse expiries** — on a thin chain (e.g. expiry
+   06-12), several intervals collapse to the *same* condor because
+   `_find_closest_option` clamps to the same last available traded strike.
+   Values are sane (credit, 20-wing); the rows are just redundant. Future:
+   flag/skip a duplicate interval instead of silently repeating it.
+2. **Sunday filtering in `get_expiry_dates`** — a Sunday expiry is still carried
+   even though Sunday is closed under the Mon–Fri calendar.
+3. **Recovery/alert conflates real failure with expected state** — "cycle empty"
+   can fire false alerts (e.g. the morning T-1/no-intraday window) as if it were
+   a genuine failure.
+4. **Spot source drift** — TASE direct vs Yahoo can return different index
+   values; the precedence and tolerance between them is not mapped in depth.

@@ -442,6 +442,14 @@ def load_strategies() -> pd.DataFrame:
     if not all_rows:
         return pd.DataFrame()
     df = pd.DataFrame(all_rows)
+    # Hide strategies flagged invalid (e.g. pre-fix debit / asymmetric-wing rows)
+    # from the active display + analytics. They stay in the DB for history; only
+    # the view layer filters them. Guarded so the dashboard keeps working if the
+    # is_valid column has not been added yet (null / missing => treated as valid).
+    if "is_valid" in df.columns:
+        df = df[df["is_valid"] != False].reset_index(drop=True)
+        if df.empty:
+            return df
     num_cols = [
         "base_index_value", "interval_pct",
         "short_put_strike", "long_put_strike",
