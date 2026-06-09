@@ -31,7 +31,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from config import (
-    TZ_ISRAEL, TRADING_DAYS, MARKET_OPEN, MARKET_CLOSE,
+    TZ_ISRAEL, TRADING_DAYS,
     INTERVALS, WING_WIDTH,   # same constants _calculate_condor uses for its strike band
 )
 
@@ -269,6 +269,29 @@ def _parse_trade_date(raw: str | None) -> Optional[date]:
     return None
 
 
+def _trading_days_between(start: date, end: date) -> int:
+    """
+    Count trading days in the half-open interval (start, end] — `start`
+    exclusive, `end` inclusive — using TRADING_DAYS (the same weekday set the
+    pipeline uses everywhere; single source of truth, no second calendar).
+
+    NOTE: TRADING_DAYS is a weekday set (Mon–Fri); config has no holiday
+    calendar, so a mid-week exchange holiday is counted here as a trading day.
+    Consequence: the first session after a mid-week holiday can over-count by
+    one and flag STALE_TRADE_DATE. That is fail-safe (it blocks rather than
+    trades on possibly-stale data) and avoids inventing a second calendar.
+    """
+    if end <= start:
+        return 0
+    n = 0
+    d = start + timedelta(days=1)
+    while d <= end:
+        if d.weekday() in TRADING_DAYS:
+            n += 1
+        d += timedelta(days=1)
+    return n
+
+
 def check_trade_date(
     trade_date_raw: str | None,
     fetch_date_str: str,
@@ -276,11 +299,16 @@ def check_trade_date(
     """
     Return a warning if the API's TradeDate is stale relative to today.
 
-    Rules:
-    - During trading hours: TradeDate must equal today. Stale = CRITICAL.
-    - Outside trading hours: TradeDate may be the previous trading day.
-      Two or more days stale = CRITICAL.
-    - Unable to parse trade_date: WARNING only (might be a format change).
+    The TASE putvscall feed (qType=3) serves the PREVIOUS trading day's EOD —
+    there is no intraday on this endpoint (verified by probe). So one trading
+    day of lag (T-1 EOD) is the normal, legitimate input and is NOT flagged.
+
+    Rules (measured in TRADING days, not calendar days):
+    - TradeDate == today                  → fresh, no flag.
+    - TradeDate on a non-trading weekday   → WARNING (unexpected at source).
+    - 1 trading day stale (T-1 EOD)        → accepted, no flag.
+    - >= 2 trading days stale              → CRITICAL (a genuinely stuck feed).
+    - Missing / unparseable trade_date     → WARNING only.
     """
     if trade_date_raw is None:
         return DataQualityWarning(
@@ -299,39 +327,40 @@ def check_trade_date(
             detail=f"Cannot parse TradeDate '{trade_date_raw}' — skipping staleness check",
         )
 
-    now       = datetime.now(TZ_ISRAEL)
-    today     = now.date()
-    delta_days = (today - td).days
+    today = datetime.now(TZ_ISRAEL).date()
 
-    if delta_days == 0:
-        return None  # fresh
+    if td == today:
+        return None  # fresh — today's own data
 
-    in_market = (
-        now.weekday() in TRADING_DAYS
-        and MARKET_OPEN <= now.time() <= MARKET_CLOSE
-    )
+    # TradeDate landing on a day the exchange is closed (by weekday) is not a
+    # staleness condition — it means something unexpected at the source. Surface
+    # it as a WARNING (does not block the cycle).
+    if td.weekday() not in TRADING_DAYS:
+        return DataQualityWarning(
+            level=DQLevel.WARNING,
+            code="TRADE_DATE_ON_CLOSED_DAY",
+            count=0,
+            detail=(
+                f"TradeDate {td.isoformat()} ({td:%A}) falls on a non-trading "
+                f"day — unexpected at source; not treated as staleness"
+            ),
+        )
 
-    if delta_days >= 2 or (in_market and delta_days >= 1):
+    stale_td = _trading_days_between(td, today)
+
+    if stale_td >= 2:
         return DataQualityWarning(
             level=DQLevel.CRITICAL,
             code="STALE_TRADE_DATE",
             count=0,
             detail=(
                 f"TradeDate is {td.isoformat()} but today is {today.isoformat()} "
-                f"({'market open' if in_market else 'after hours'}) — "
-                f"feed is {delta_days} day(s) stale"
+                f"— feed is {stale_td} trading day(s) stale"
             ),
         )
 
-    return DataQualityWarning(
-        level=DQLevel.WARNING,
-        code="STALE_TRADE_DATE",
-        count=0,
-        detail=(
-            f"TradeDate is {td.isoformat()} (yesterday) during after-hours — "
-            "this is expected on rollover; will re-check next cycle"
-        ),
-    )
+    # Exactly one trading day of lag = T-1 EOD, the expected feed state.
+    return None
 
 
 # ------------------------------------------------------------------
