@@ -42,7 +42,10 @@
 
 ## HIGH
 
-### H1 — Demo auto-settlement can permanently close a trade at a wrong price, silently
+### H1 — Demo auto-settlement can permanently close a trade at a wrong price, silently  ✅ FIXED (commit after `de2ccb3`)
+- **Correction to first report:** the wrong price is the ENTRY index, which for
+  a centered condor books **max profit** (a fake WIN, ₪500 in the verified
+  example), not ₪0. Verified numerically.
 - **Where:** Demo Trading auto-settlement block. `dashboard.py:1998–2004`.
 - **What breaks:** for an expired open demo trade it tries the strategy's
   `actual_index_close`; if that's missing it falls back to `live_index`, and if

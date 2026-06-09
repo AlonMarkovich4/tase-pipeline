@@ -1984,7 +1984,6 @@ elif nav_page == "🕹️ Demo Trading":
         for et in _expired:
             et_id = et.get("trade_id", "?")
             et_expiry = et.get("expiry_date", "")
-            et_entry = float(et.get("entry_index", 0))
             settle_idx = 0.0
             try:
                 s_url = (f"{SUPABASE_URL}/rest/v1/iron_condor_strategies"
@@ -1995,8 +1994,17 @@ elif nav_page == "🕹️ Demo Trading":
                     settle_idx = float(sr.json()[0].get("actual_index_close", 0))
             except Exception:
                 pass
+            # Settlement price priority: real strategy close -> live index ->
+            # DO NOT settle. We never fall back to the entry index: for a
+            # centered condor that books a fake MAX-PROFIT win and is
+            # irreversible. With no reliable price, leave the trade OPEN and
+            # don't touch the balance; it settles on a later visit once the
+            # strategy settles, or via the manual close button. It is NOT added
+            # to settled_ids, so it is re-checked every rerun until settleable.
+            if settle_idx <= 0 and live_index > 0:
+                settle_idx = live_index
             if settle_idx <= 0:
-                settle_idx = live_index if live_index > 0 else et_entry
+                continue
             final_pnl = sandbox_trade_pnl(et, settle_idx)
             close_demo_trade(et_id, settle_idx, final_pnl, "expiry_settlement")
             _bal += final_pnl
@@ -2004,7 +2012,8 @@ elif nav_page == "🕹️ Demo Trading":
             st.session_state.settled_ids.add(et_id)
             _results.append({"id": et_id, "name": et.get("strategy_name", ""),
                              "expiry": et_expiry, "settle": settle_idx, "pnl": final_pnl})
-        _settlement_dialog(_results, _bal)
+        if _results:
+            _settlement_dialog(_results, _bal)
 
     # ── Shared state ──
     # Use live index; fall back to last known base from Supabase;
@@ -2530,6 +2539,20 @@ elif nav_page == "🕹️ Demo Trading":
                 t_pnl = sandbox_trade_pnl(t, live_index) if live_index > 0 else 0.0
                 pnl_color = "pos" if t_pnl >= 0 else "neg"
 
+                # Expired but still open => auto-settlement found no reliable
+                # settlement price (no strategy close + no live index). Surface
+                # it so an expired-yet-open trade isn't a silent mystery; it
+                # will settle automatically once a price is available, or via
+                # the manual close button below.
+                _is_pending = bool(t_expiry) and str(t_expiry) < _today
+                _pending_chip = (
+                    f'<span style="margin-inline-start:8px;padding:2px 8px;'
+                    f'border-radius:6px;background:rgba(249,168,37,0.15);'
+                    f'color:{T_WARN};font-size:11px;font-weight:500;">'
+                    f'⏳ ממתין לסליקה — אין מחיר סליקה אמין</span>'
+                    if _is_pending else ""
+                )
+
                 st.markdown(
                     f'<div style="background:var(--surface);border:1px solid var(--border);'
                     f'border-radius:var(--r-md);padding:14px 16px;margin:10px 0;">'
@@ -2537,7 +2560,7 @@ elif nav_page == "🕹️ Demo Trading":
                     f'align-items:center;flex-wrap:wrap;gap:8px;">'
                     f'<div style="display:flex;align-items:baseline;gap:8px;">'
                     f'<span style="color:{T_TEXT1};font-weight:500;font-size:14px;">{t_name}</span>'
-                    f'<span style="color:{T_TEXT3};font-size:12px;">#{t_id}</span></div>'
+                    f'<span style="color:{T_TEXT3};font-size:12px;">#{t_id}</span>{_pending_chip}</div>'
                     f'<div style="display:flex;gap:16px;">'
                     f'<span style="color:{T_TEXT2};font-size:12px;">פקיעה '
                     f'<strong style="color:{T_TEXT1};">{t_expiry}</strong></span>'
