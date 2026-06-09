@@ -64,7 +64,11 @@
 
 ## MEDIUM
 
-### M1 — History shows expired-but-unsettled strategies as ₪0 "settled" (inconsistent with Performance)
+### M1 — History shows expired-but-unsettled strategies as ₪0 "settled" (inconsistent with Performance)  ✅ FIXED
+- **Fix:** added `_is_actually_settled` (real result AND settlement price). History
+  aggregates use only the settled subset; expired-unsettled rows get a "⏳ ממתין
+  לסליקה" state in both the detail panel and the pnl-hero (no ₪0 break-even), plus
+  a count notice above the comparison.
 - **Where:** global prep `dashboard.py:1538–1539`; Performance `1588`; History `2806+`.
 - **What breaks:** `_is_expired` rows (expiry past, never settled) are forced
   `_is_settled = True`. Performance excludes them (`actual_index_close > 0`), but

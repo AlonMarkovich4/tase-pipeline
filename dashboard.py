@@ -1534,6 +1534,13 @@ if has_strategies:
         axis=1,
     )
     df["_is_settled"] = df["result_status"].notna() & (df["result_status"] != "")
+    # "Actually settled" = the engine wrote a real result AND a settlement price.
+    # Distinct from _is_settled below, which also absorbs expired-but-unsettled
+    # rows so they leave Open Positions — but those have NO real P&L and must
+    # not be shown in History as a ₪0 settled break-even.
+    df["_is_actually_settled"] = (
+        df["_is_settled"] & (df["actual_index_close"] > 0)
+    )
     today_str = now_il.strftime("%Y-%m-%d")
     df["_is_expired"] = (df["expiry_date"] < today_str) & (~df["_is_settled"])
     df.loc[df["_is_expired"], "_is_settled"] = True
@@ -2835,62 +2842,76 @@ elif has_strategies:
                 f'<div class="es-sub">אף אסטרטגיה לא פקעה עדיין</div>'
                 f'</div>', unsafe_allow_html=True)
         else:
-            history_intervals = sorted(all_history["interval_pct"].unique())
+            # M1: separate actually-settled rows (real P&L) from expired-but-
+            # unsettled ones (no settlement price). Aggregates use only the
+            # settled set so a pending row is never counted as a ₪0 result.
+            hist_settled = all_history[all_history["_is_actually_settled"]].copy()
+            hist_pending = all_history[~all_history["_is_actually_settled"]].copy()
+
+            if not hist_pending.empty:
+                st.info(
+                    f"⏳ {len(hist_pending)} אסטרטגיות פקעו וטרם סולקו "
+                    f"(אין מחיר סליקה אמין) — אינן נכללות בסיכומים; "
+                    f'מסומנות "ממתין לסליקה" בניתוח המפורט למטה.'
+                )
+
+            history_intervals = sorted(hist_settled["interval_pct"].unique())
             comparison_data = []
             for pct in history_intervals:
-                idf = all_history[all_history["interval_pct"] == pct]
+                idf = hist_settled[hist_settled["interval_pct"] == pct]
                 comparison_data.append({
                     "pct": pct, "actual_pnl": idf["actual_pnl_ils"].sum(),
                     "max_possible": idf["max_profit_ils"].sum(),
                     "n_total": len(idf), "n_wins": int((idf["actual_pnl_ils"] > 0).sum()),
                 })
 
-            render_section_header("📊 מה יכולת להרוויח? — השוואת מרווחים")
+            if comparison_data:
+                render_section_header("📊 מה יכולת להרוויח? — השוואת מרווחים")
 
-            _comp_rows = []
-            for cd in comparison_data:
-                wr   = cd["n_wins"] / cd["n_total"] * 100 if cd["n_total"] else 0
-                util = cd["actual_pnl"] / cd["max_possible"] * 100 if cd["max_possible"] else 0
-                _comp_rows.append({
-                    "מרווח %":          cd["pct"],
-                    "פקיעות":           cd["n_total"],
-                    "ניצחונות":         cd["n_wins"],
-                    "Win Rate %":       round(wr, 1),
-                    "Max Possible (₪)": cd["max_possible"],
-                    "Actual P&L (₪)":   cd["actual_pnl"],
-                    "ניצול %":          round(util, 1),
-                })
-            _comp_df = pd.DataFrame(_comp_rows)
-            st.dataframe(
-                _comp_df,
-                use_container_width=True,
-                column_config={
-                    "מרווח %":          st.column_config.NumberColumn(format="%.1f%%"),
-                    "פקיעות":           st.column_config.NumberColumn(format="%d"),
-                    "ניצחונות":         st.column_config.NumberColumn(format="%d"),
-                    "Win Rate %":       st.column_config.ProgressColumn(
-                                            min_value=0, max_value=100, format="%.0f%%"),
-                    "Max Possible (₪)": st.column_config.NumberColumn(format="%+,.0f ₪"),
-                    "Actual P&L (₪)":   st.column_config.NumberColumn(format="%+,.0f ₪"),
-                    "ניצול %":          st.column_config.ProgressColumn(
-                                            min_value=-100, max_value=100, format="%.0f%%"),
-                },
-                hide_index=True,
-            )
+                _comp_rows = []
+                for cd in comparison_data:
+                    wr   = cd["n_wins"] / cd["n_total"] * 100 if cd["n_total"] else 0
+                    util = cd["actual_pnl"] / cd["max_possible"] * 100 if cd["max_possible"] else 0
+                    _comp_rows.append({
+                        "מרווח %":          cd["pct"],
+                        "פקיעות":           cd["n_total"],
+                        "ניצחונות":         cd["n_wins"],
+                        "Win Rate %":       round(wr, 1),
+                        "Max Possible (₪)": cd["max_possible"],
+                        "Actual P&L (₪)":   cd["actual_pnl"],
+                        "ניצול %":          round(util, 1),
+                    })
+                _comp_df = pd.DataFrame(_comp_rows)
+                st.dataframe(
+                    _comp_df,
+                    use_container_width=True,
+                    column_config={
+                        "מרווח %":          st.column_config.NumberColumn(format="%.1f%%"),
+                        "פקיעות":           st.column_config.NumberColumn(format="%d"),
+                        "ניצחונות":         st.column_config.NumberColumn(format="%d"),
+                        "Win Rate %":       st.column_config.ProgressColumn(
+                                                min_value=0, max_value=100, format="%.0f%%"),
+                        "Max Possible (₪)": st.column_config.NumberColumn(format="%+,.0f ₪"),
+                        "Actual P&L (₪)":   st.column_config.NumberColumn(format="%+,.0f ₪"),
+                        "ניצול %":          st.column_config.ProgressColumn(
+                                                min_value=-100, max_value=100, format="%.0f%%"),
+                    },
+                    hide_index=True,
+                )
 
-            render_section_header("📈 Max Profit vs. Actual P&L")
-            abs_max = max(max(abs(cd["max_possible"]), abs(cd["actual_pnl"]))
-                          for cd in comparison_data) if comparison_data else 1
-            for cd in comparison_data:
-                max_w = (cd["max_possible"] / abs_max * 100) if abs_max > 0 else 0
-                actual_w = (abs(cd["actual_pnl"]) / abs_max * 100) if abs_max > 0 else 0
-                bar_c = C_GREEN if cd["actual_pnl"] >= 0 else C_RED
-                st.markdown(
-                    f'<div class="cmp-row">'
-                    f'<div style="font-weight:600;color:{T_TEXT1};font-size:14px;margin-bottom:6px;font-variant-numeric:tabular-nums;">{cd["pct"]:.1f}%</div>'
-                    f'<div class="cmp-line"><span class="cmp-lbl">Max</span><div class="cmp-track"><div class="cmp-fill" style="width:{max_w:.0f}%;background:{T_ACCENT}"></div></div><span class="cmp-val" style="color:{T_ACCENT}">{fmt_ils(cd["max_possible"])}</span></div>'
-                    f'<div class="cmp-line"><span class="cmp-lbl">Actual</span><div class="cmp-track"><div class="cmp-fill" style="width:{actual_w:.0f}%;background:{bar_c}"></div></div><span class="cmp-val" style="color:{bar_c}">{fmt_ils(cd["actual_pnl"])}</span></div>'
-                    f'</div>', unsafe_allow_html=True)
+                render_section_header("📈 Max Profit vs. Actual P&L")
+                abs_max = max(max(abs(cd["max_possible"]), abs(cd["actual_pnl"]))
+                              for cd in comparison_data) if comparison_data else 1
+                for cd in comparison_data:
+                    max_w = (cd["max_possible"] / abs_max * 100) if abs_max > 0 else 0
+                    actual_w = (abs(cd["actual_pnl"]) / abs_max * 100) if abs_max > 0 else 0
+                    bar_c = C_GREEN if cd["actual_pnl"] >= 0 else C_RED
+                    st.markdown(
+                        f'<div class="cmp-row">'
+                        f'<div style="font-weight:600;color:{T_TEXT1};font-size:14px;margin-bottom:6px;font-variant-numeric:tabular-nums;">{cd["pct"]:.1f}%</div>'
+                        f'<div class="cmp-line"><span class="cmp-lbl">Max</span><div class="cmp-track"><div class="cmp-fill" style="width:{max_w:.0f}%;background:{T_ACCENT}"></div></div><span class="cmp-val" style="color:{T_ACCENT}">{fmt_ils(cd["max_possible"])}</span></div>'
+                        f'<div class="cmp-line"><span class="cmp-lbl">Actual</span><div class="cmp-track"><div class="cmp-fill" style="width:{actual_w:.0f}%;background:{bar_c}"></div></div><span class="cmp-val" style="color:{bar_c}">{fmt_ils(cd["actual_pnl"])}</span></div>'
+                        f'</div>', unsafe_allow_html=True)
 
             render_section_header("🔍 ניתוח מפורט לפי פקיעה ומרווח")
 
@@ -2945,14 +2966,32 @@ elif has_strategies:
                 f'<span class="badge {_badge_cls}">{_badge_lbl}</span>'
             ) if _result_status else "—"
 
-            st.markdown(
-                f'<div class="metric-grid">'
-                f'<div class="metric-card"><div class="label">Settlement Index</div><div class="value white">{fmt_num(settle_price)}</div></div>'
-                f'<div class="metric-card"><div class="label">Position</div><div style="margin-top:8px">{zone_badge}</div></div>'
-                f'<div class="metric-card"><div class="label">Actual P&L</div><div class="value {a_color}">{fmt_ils(actual_pnl)}</div></div>'
-                f'<div class="metric-card"><div class="label">Max Possible</div><div class="value blue">{fmt_ils(max_profit)}</div></div>'
-                f'<div class="metric-card"><div class="label">תוצאה</div><div style="margin-top:8px">{_status_badge_html}</div></div>'
-                f'</div>', unsafe_allow_html=True)
+            # M1: a row is genuinely settled only with a real result AND a
+            # settlement price. Otherwise it expired but was never settled —
+            # show a clear pending state, never a ₪0 "settled" break-even.
+            _row_settled = (float(settle_price or 0) > 0) and bool(_result_status)
+
+            if not _row_settled:
+                st.markdown(
+                    f'<div class="metric-grid">'
+                    f'<div class="metric-card"><div class="label">תוצאה</div>'
+                    f'<div style="margin-top:8px"><span class="badge active">⏳ ממתין לסליקה</span></div></div>'
+                    f'<div class="metric-card"><div class="label">Max Possible</div>'
+                    f'<div class="value blue">{fmt_ils(max_profit)}</div></div>'
+                    f'<div class="metric-card"><div class="label">פקיעה</div>'
+                    f'<div class="value white">{sel_hist_expiry}</div></div>'
+                    f'</div>', unsafe_allow_html=True)
+                st.caption("האסטרטגיה פקעה אך טרם סולקה — אין מחיר סליקה אמין "
+                           "במערכת. ה-P&L האמיתי יוצג לאחר שתרוץ הסליקה.")
+            else:
+                st.markdown(
+                    f'<div class="metric-grid">'
+                    f'<div class="metric-card"><div class="label">Settlement Index</div><div class="value white">{fmt_num(settle_price)}</div></div>'
+                    f'<div class="metric-card"><div class="label">Position</div><div style="margin-top:8px">{zone_badge}</div></div>'
+                    f'<div class="metric-card"><div class="label">Actual P&L</div><div class="value {a_color}">{fmt_ils(actual_pnl)}</div></div>'
+                    f'<div class="metric-card"><div class="label">Max Possible</div><div class="value blue">{fmt_ils(max_profit)}</div></div>'
+                    f'<div class="metric-card"><div class="label">תוצאה</div><div style="margin-top:8px">{_status_badge_html}</div></div>'
+                    f'</div>', unsafe_allow_html=True)
 
             render_legs_table(row)
 
@@ -2992,13 +3031,21 @@ elif has_strategies:
             render_payoff_chart(row, ref_price=settle_price,
                                 ref_label=f"Settlement: {settle_price:,.2f}" if settle_price > 0 else "")
 
-            pnl_class = "profit" if actual_pnl >= 0 else "loss"
-            st.markdown(
-                f'<div class="pnl-hero">'
-                f'<div class="title">Settlement Result — {sel_hist_expiry} @ {sel_hist_interval:.1f}%</div>'
-                f'<div class="amount {pnl_class}">{fmt_ils(actual_pnl)}</div>'
-                f'<div style="color:{T_TEXT2};font-size:13px;margin-top:8px">out of max possible: {fmt_ils(max_profit)}</div>'
-                f'</div>', unsafe_allow_html=True)
+            if _row_settled:
+                pnl_class = "profit" if actual_pnl >= 0 else "loss"
+                st.markdown(
+                    f'<div class="pnl-hero">'
+                    f'<div class="title">Settlement Result — {sel_hist_expiry} @ {sel_hist_interval:.1f}%</div>'
+                    f'<div class="amount {pnl_class}">{fmt_ils(actual_pnl)}</div>'
+                    f'<div style="color:{T_TEXT2};font-size:13px;margin-top:8px">out of max possible: {fmt_ils(max_profit)}</div>'
+                    f'</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    f'<div class="pnl-hero">'
+                    f'<div class="title">Settlement Result — {sel_hist_expiry} @ {sel_hist_interval:.1f}%</div>'
+                    f'<div class="amount" style="color:{T_WARN};">⏳ ממתין לסליקה</div>'
+                    f'<div style="color:{T_TEXT2};font-size:13px;margin-top:8px">אין מחיר סליקה אמין — P&L יוצג לאחר סליקה</div>'
+                    f'</div>', unsafe_allow_html=True)
 
 else:
     if nav_page != "🕹️ Demo Trading":
