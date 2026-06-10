@@ -545,6 +545,31 @@ def assess_cycle_quality(cycle_result: dict, recent_rows: list) -> list:
 
 
 # ------------------------------------------------------------------
+# EOD archival — idempotent, restart-safe
+# ------------------------------------------------------------------
+
+def _archive_eod_snapshot(today_iso: str) -> None:
+    """
+    Archive the day's last (EOD) option-chain snapshot to the history table,
+    for knowledge retention. Idempotent and restart-safe: guarded by a
+    persistent pipeline_state marker (`history_copied:<date>`), so it can fire
+    from EITHER the last in-market cycle OR the off-hours block after close —
+    a single missed/failed cycle no longer loses the day. copy_to_history reads
+    the live table, which still holds the EOD snapshot until the next morning's
+    first successful cycle, so the evening window is a safe catch-up.
+    """
+    marker = f"history_copied:{today_iso}"
+    try:
+        if db.state_is_set(marker):
+            return
+        if db.copy_to_history():
+            db.state_set(marker)
+            logger.info("*** EOD snapshot archived to history (%s) ***", today_iso)
+    except Exception as e:
+        logger.error("EOD archive error (%s): %s", today_iso, e)
+
+
+# ------------------------------------------------------------------
 # Main loop
 # ------------------------------------------------------------------
 
@@ -566,7 +591,6 @@ def main():
     weekly_summary_week = None       # track which week got summary
     weekly_backup_week = None        # track which week got backup
     daily_summary_date = None        # track which date got daily summary
-    history_copied_date = None       # track which date got copied to history
     current_day = None               # track current day for counter resets
     consecutive_failures = 0         # crash detection counter
     crash_alerted = False            # True once a crash alert was sent for
@@ -594,6 +618,14 @@ def main():
 
             # ── Off-hours block ──────────────────────────────────────
             if not is_trading_hours(now):
+                # EOD archival catch-up: on a trading day, once the market has
+                # closed, archive the day's EOD snapshot if it wasn't archived
+                # by the last in-market cycle (missed/failed cycle, restart…).
+                # Idempotent via the persistent marker; the live table still
+                # holds the EOD snapshot until tomorrow's first cycle.
+                if now.weekday() in TRADING_DAYS and now.time() > MARKET_CLOSE:
+                    _archive_eod_snapshot(now.strftime("%Y-%m-%d"))
+
                 # Fire post-close weekly summary if due
                 if (weekly_summary_due_at is not None
                         and now >= weekly_summary_due_at
@@ -849,11 +881,9 @@ def main():
                             except Exception as de:
                                 logger.error("Daily summary error: %s", de)
 
-                    # Copy to history
-                    if history_copied_date != today_iso:
-                        logger.info("*** Last cycle of the day — saving to history ***")
-                        if db.copy_to_history():
-                            history_copied_date = today_iso
+                    # Copy to history (EOD) — idempotent + restart-safe; the
+                    # off-hours block also catches this if the cycle is missed.
+                    _archive_eod_snapshot(today_iso)
 
                 # ── Failure handling & recovery ───────────────────────
                 if not ok:
