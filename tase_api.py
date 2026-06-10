@@ -24,6 +24,29 @@ logger = logging.getLogger("tase_pipeline")
 API_URL    = "https://api.tase.co.il/api/derivatives/putvscall"
 EXPIRY_URL = "https://api.tase.co.il/api/derivatives/fltrputvscallexpdates"
 
+# Lowest plausible TA-35 option strike. TASE appends one constant placeholder/
+# summary row per response (strike "1", no put) that is not a real contract;
+# we drop it at the source so the validation gate's ITEMS_REJECTED warning
+# stays a meaningful signal for a GENUINELY bad row instead of firing every
+# cycle on this known junk.
+_MIN_VALID_STRIKE = 1000.0
+
+
+def _is_real_option_row(item: dict) -> bool:
+    """True if either side carries a plausible TA-35 strike (>= _MIN_VALID_STRIKE).
+    Drops TASE's placeholder/summary row (strike '1') case-insensitively."""
+    for key in ("ExpirationPrice_call", "ExpirationPrice_Call",
+                "ExpirationPrice_put", "ExpirationPrice_Put"):
+        v = item.get(key)
+        if v in (None, ""):
+            continue
+        try:
+            if float(str(v).replace(",", "")) >= _MIN_VALID_STRIKE:
+                return True
+        except (ValueError, TypeError):
+            continue
+    return False
+
 
 def get_expiry_dates(page, max_retries: int = 3) -> list:
     """Fetch active weekly expiry dates from TASE.
@@ -74,7 +97,10 @@ def get_expiry_dates(page, max_retries: int = 3) -> list:
         raw = it.get("Date", "")
         try:
             d = date(int(raw[6:10]), int(raw[3:5]), int(raw[0:2]))
-            if today <= d <= window_end:
+            # Skip expiries on non-trading weekdays. TASE may list a Sunday
+            # expiry (e.g. 2026-06-14), but the market is closed Sun (Mon–Fri
+            # calendar), so it never trades or settles here — don't scrape it.
+            if today <= d <= window_end and d.weekday() in TRADING_DAYS:
                 dates.append(d)
         except (ValueError, IndexError):
             continue
@@ -178,7 +204,15 @@ def _fetch_all_pages(page, expr_date_iso: str):
         # Minimal pause between pages — TASE WAF tolerates intra-expiry pagination.
         time.sleep(0.15)
 
-    return all_items, trade_date, asset_name, underlying_value
+    # Drop TASE's constant placeholder row (strike "1") before it leaves the
+    # fetch boundary, so the validation gate only ever rejects REAL bad rows.
+    real_items = [it for it in all_items if _is_real_option_row(it)]
+    dropped = len(all_items) - len(real_items)
+    if dropped:
+        logger.debug("Dropped %d placeholder row(s) from %s feed",
+                     dropped, expr_date_iso)
+
+    return real_items, trade_date, asset_name, underlying_value
 
 
 def run_cycle(page, cycle_time: datetime) -> dict:
