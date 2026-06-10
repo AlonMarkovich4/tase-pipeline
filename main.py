@@ -881,20 +881,36 @@ def main():
                     _archive_eod_snapshot(today_iso)
 
                 # ── Failure handling & recovery ───────────────────────
-                if not ok:
+                # Distinguish failure types (don't treat a stale/empty feed like
+                # a dead browser):
+                #   • transport failure (couldn't fetch the expiry list) →
+                #     recover the session + escalate to a crash alert.
+                #   • data-quality / empty (got the list but data was stale,
+                #     CRITICAL, or no-trading) → transport is healthy, so DON'T
+                #     recover the browser and DON'T crash-alert. The throttled
+                #     data-quality alert already fired inside run_cycle.
+                transport_ok = cycle_result.get("transport_ok", ok)
+                if ok or transport_ok:
+                    consecutive_failures = 0
+                    crash_alerted        = False
+                    if not ok:
+                        reason = ("data-quality CRITICAL"
+                                  if cycle_result.get("had_critical")
+                                  else "no data stored (stale/empty/no-trading)")
+                        logger.info(
+                            "Cycle stored nothing (%s) — transport healthy, "
+                            "no session recovery", reason)
+                else:
                     daily_errors        += 1
                     consecutive_failures += 1
-                    logger.warning("Cycle empty (%d consecutive) — recovering session",
+                    logger.warning("Transport failure (%d consecutive) — recovering session",
                                    consecutive_failures)
                     if consecutive_failures >= 3 and not crash_alerted:
                         telegram_bot.alert_crash(
-                            f"{consecutive_failures} consecutive failures")
+                            f"{consecutive_failures} consecutive transport failures")
                         crash_alerted = True
                     browser, context, page = _browser.recover(
                         pw, browser, context, page, HEADLESS)
-                else:
-                    consecutive_failures = 0
-                    crash_alerted        = False
 
                 health_server.update(
                     status="running",

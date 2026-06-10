@@ -223,8 +223,11 @@ def run_cycle(page, cycle_time: datetime) -> dict:
 
     expiry_dates = get_expiry_dates(page)
     if not expiry_dates:
+        # Couldn't even fetch the expiry list — the browser/WAF/network path is
+        # down. This is a TRANSPORT failure (transport_ok=False) → main recovers
+        # the session. Distinct from "got data but it was stale/empty".
         logger.warning("No expiry dates — skipping cycle")
-        return {"ok": False, "rows": 0, "expiries": 0}
+        return {"ok": False, "rows": 0, "expiries": 0, "transport_ok": False}
 
     logger.info("Expiry dates: %s", [d.isoformat() for d in expiry_dates])
 
@@ -236,6 +239,7 @@ def run_cycle(page, cycle_time: datetime) -> dict:
 
     success_count = 0
     total_rows    = 0
+    had_critical  = False
 
     for idx, exp_date in enumerate(expiry_dates):
         exp_iso = exp_date.isoformat()
@@ -262,6 +266,7 @@ def run_cycle(page, cycle_time: datetime) -> dict:
             vr = _schema.validate_items(items, date_str, trade_dt, exp_iso)
 
             if vr.has_critical:
+                had_critical = True
                 for w in vr.warnings:
                     if w.level == _schema.DQLevel.CRITICAL:
                         logger.error(
@@ -323,6 +328,12 @@ def run_cycle(page, cycle_time: datetime) -> dict:
         "expiries":     len(expiry_dates),
         "expiry_dates": expiry_dates,
         "full_success": success_count == len(expiry_dates),
+        # We fetched the expiry list (and reached here), so the browser/WAF/
+        # network path works → transport is OK even if nothing was stored.
+        "transport_ok": True,
+        # True if the data was fetched but blocked by a CRITICAL quality issue
+        # (e.g. stale feed) — a DATA condition, not a transport failure.
+        "had_critical": had_critical,
     }
 
 
