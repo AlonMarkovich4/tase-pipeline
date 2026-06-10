@@ -27,6 +27,7 @@ from config import (
     TZ_ISRAEL, TRADING_DAYS, MARKET_OPEN, MARKET_CLOSE, DAY_NAMES,
     STRATEGY_WINDOW_OPEN, STRATEGY_WINDOW_CLOSE, SETTLEMENT_AFTER,
     BROWSER_RESTART_SECONDS, FETCH_INTERVAL_MINUTES,
+    TA35_MIN, TA35_MAX,
 )
 
 # ------------------------------------------------------------------
@@ -166,7 +167,7 @@ def _get_tase_last_rate(page=None) -> float:
                     continue
                 try:
                     v = float(str(raw).replace(",", ""))
-                    if 1000 <= v <= 10000:
+                    if TA35_MIN <= v <= TA35_MAX:
                         return v
                 except (ValueError, TypeError):
                     continue
@@ -313,7 +314,7 @@ def _fetch_all_pages(page, expr_date_iso: str):
                         continue
                     try:
                         v = float(str(raw).replace(",", ""))
-                        if 1000 <= v <= 10000:
+                        if TA35_MIN <= v <= TA35_MAX:
                             underlying_value = v
                             logger.info(
                                 "   TA-35 from TASE item field '%s': %.2f",
@@ -459,12 +460,6 @@ def run_cycle(page, cycle_time: datetime):
         "index_value": cycle_underlying,
         "index_source": cycle_index_source,  # "tase" | "yahoo_fallback"
     }
-
-
-def is_last_cycle(now: datetime) -> bool:
-    """Check if the next cycle would be outside trading hours."""
-    next_cycle = now + timedelta(seconds=FETCH_INTERVAL)
-    return next_cycle.time() > MARKET_CLOSE
 
 
 def is_last_trading_day_of_week(now: datetime, expiry_dates: list) -> bool:

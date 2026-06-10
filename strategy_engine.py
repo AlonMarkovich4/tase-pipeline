@@ -27,6 +27,7 @@ import telegram_bot
 from config import (
     TZ_ISRAEL, TASE_MULTIPLIER, WING_WIDTH, INTERVALS,
     DAY_NAMES_EN, DAY_NAMES_HE, PRICE_SANITY_MAX_PTS,
+    TA35_MIN, TA35_MAX,
 )
 
 logger = logging.getLogger("tase_pipeline")
@@ -189,7 +190,7 @@ def _get_base_index(rows: list) -> float:
     M-4: first pass collects latest_key, ATM-delta candidate, and sane strikes
     simultaneously, reducing total iterations from 4 down to 2 worst-case.
     """
-    SANE_MIN, SANE_MAX = 1000.0, 10000.0
+    SANE_MIN, SANE_MAX = float(TA35_MIN), float(TA35_MAX)
 
     def _is_sane(v: float) -> bool:
         return SANE_MIN <= v <= SANE_MAX
@@ -763,12 +764,12 @@ def run_strategy(tase_live_index: float = 0.0):
 
     # 2. Get base index — priority: TASE direct → Supabase → Yahoo → ATM
     base_index = 0.0
-    if tase_live_index and 1000 <= tase_live_index <= 10000:
+    if tase_live_index and TA35_MIN <= tase_live_index <= TA35_MAX:
         base_index = tase_live_index
         logger.info("Base index from TASE direct API: %.2f", base_index)
     if base_index <= 0:
         base_index = _get_base_index(rows)
-    if not (1000 <= base_index <= 10000):
+    if not (TA35_MIN <= base_index <= TA35_MAX):
         logger.error("Strategy: base index %.2f outside TA-35 sane range "
                      "[1000, 10000] — aborting to prevent corrupt strategies",
                      base_index)
@@ -862,7 +863,7 @@ def settle_expiry(expiry_date_iso: str, tase_open_price: float = 0.0):
     #    b) Yahoo Finance regularMarketOpen
     #    c) underlingasset from live Supabase data
     index_close = 0.0
-    if tase_open_price and 1000 <= tase_open_price <= 10000:
+    if tase_open_price and TA35_MIN <= tase_open_price <= TA35_MAX:
         index_close = tase_open_price
         logger.info("Settlement price (TASE direct open): %.2f", index_close)
     if index_close <= 0:

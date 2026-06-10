@@ -33,13 +33,14 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from config import (
     TZ_ISRAEL, TRADING_DAYS,
     INTERVALS, WING_WIDTH,   # same constants _calculate_condor uses for its strike band
+    TA35_MIN, TA35_MAX,      # single source of truth for TA-35 sane bounds
 )
 
 logger = logging.getLogger("tase_pipeline")
 
 # TA-35 index sane bounds — used for strike and underlying validation.
-_STRIKE_MIN = Decimal("1000")
-_STRIKE_MAX = Decimal("10000")
+_STRIKE_MIN = Decimal(str(TA35_MIN))
+_STRIKE_MAX = Decimal(str(TA35_MAX))
 
 # Last-traded price is stored as index_points × 50 (the TASE multiplier).
 # The most expensive near-money option in a normal market is under 300 pts,
