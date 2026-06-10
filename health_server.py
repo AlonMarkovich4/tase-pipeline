@@ -19,6 +19,13 @@ _state: dict = {
     "last_ok":              None,
     "consecutive_failures": 0,
     "cycles_today":         0,
+    # Knowledge/health signals — last time each major action succeeded, so the
+    # whole pipeline's health is visible at a glance from the /health endpoint.
+    "last_rows":            0,       # rows stored on the last successful cycle
+    "last_expiries":        0,
+    "last_strategy_at":     None,    # ISO ts of last strategy generation
+    "last_settlement_at":   None,    # ISO ts of last settlement run
+    "last_archive_date":    None,    # date of last EOD snapshot archived
 }
 
 

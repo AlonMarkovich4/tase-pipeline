@@ -96,6 +96,8 @@ def _run_strategy_thread(strat_key: str, tase_live_index: float = 0.0) -> None:
         result = strategy_engine.run_strategy(tase_live_index=tase_live_index)
         if result:
             db.state_set(strat_key)
+            health_server.update(
+                last_strategy_at=datetime.now(TZ_ISRAEL).isoformat())
             logger.info("Strategy saved — state marker set")
         else:
             logger.warning("Strategy returned False")
@@ -559,6 +561,7 @@ def _archive_eod_snapshot(today_iso: str) -> None:
             return
         if db.copy_to_history():
             db.state_set(marker)
+            health_server.update(last_archive_date=today_iso)
             logger.info("*** EOD snapshot archived to history (%s) ***", today_iso)
     except Exception as e:
         logger.error("EOD archive error (%s): %s", today_iso, e)
@@ -822,6 +825,8 @@ def main():
                                 result = strategy_engine.settle_expiry(today_iso)
                                 if result:
                                     db.state_set(settle_key)
+                                    health_server.update(
+                                        last_settlement_at=datetime.now(TZ_ISRAEL).isoformat())
                                     settled_today = today_iso
                             else:
                                 logger.info("No unsettled strategies for %s — skipping",
@@ -912,13 +917,17 @@ def main():
                     browser, context, page = _browser.recover(
                         pw, browser, context, page, HEADLESS)
 
-                health_server.update(
+                health_update = dict(
                     status="running",
                     last_cycle=now.isoformat(),
                     last_ok=ok,
                     consecutive_failures=consecutive_failures,
                     cycles_today=daily_cycles,
                 )
+                if ok:
+                    health_update["last_rows"] = cycle_result.get("rows", 0)
+                    health_update["last_expiries"] = cycle_result.get("expiries", 0)
+                health_server.update(**health_update)
 
             except Exception as e:
                 daily_errors        += 1
