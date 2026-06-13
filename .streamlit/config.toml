@@ -1,10 +1,21 @@
+# Streamlit-native theme. Streamlit reads this file BEFORE Python runs, so
+# these four colours are mirrored by hand from theme.py (the single source of
+# truth for the dashboard's design tokens). Keep each in sync with the token
+# noted in its comment. `font` is intentionally omitted: the dashboard forces
+# a system font stack via CSS (theme.FONT_STACK), so a value here would be
+# dead. `secondaryBackgroundColor` now equals SURFACE so native widgets
+# (sidebar, dataframes, inputs) match the custom cards instead of drifting.
 [theme]
 base = "dark"
-primaryColor = "#00B0FF"
-backgroundColor = "#0B0D10"
-secondaryBackgroundColor = "#151921"
-textColor = "#E8EAED"
-font = "sans serif"
+primaryColor = "#00B0FF"             # = theme.ACCENT
+backgroundColor = "#0B0D10"          # = theme.BG
+secondaryBackgroundColor = "#111418" # = theme.SURFACE
+textColor = "#E8EAED"                # = theme.TEXT1
 
 [server]
 headless = true
+# Serves files in ./static/ at the app/static/ path. The dashboard self-hosts
+# Inter from static/fonts/ (referenced by theme.py @font-face) instead of a
+# web-font CDN. If this is ever disabled, the font 404s and the browser falls
+# back to the system stack in theme.FONT_STACK — no breakage, just no Inter.
+enableStaticServing = true

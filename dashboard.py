@@ -54,20 +54,19 @@ except ImportError:
 DEMO_INITIAL_BALANCE = 100_000.0
 STRATEGY_LOOKBACK_DAYS = 90  # how far back to load strategies (perf)
 
-# ── Design tokens — single source of truth ──────────────────────
-T_BG      = "#0B0D10"          # page background
-T_SURFACE = "#111418"          # card / panel surface
-T_SURF2   = "#161B22"          # raised surface (table header, etc.)
-T_BORDER  = "rgba(255,255,255,0.07)"   # subtle border
-T_BORDER2 = "rgba(255,255,255,0.12)"   # stronger border
-T_TEXT1   = "#E8EAED"          # primary text
-T_TEXT2   = "#9AA0A6"          # secondary / label text
-T_TEXT3   = "#5F6368"          # tertiary / disabled
-T_ACCENT  = "#00B0FF"          # single accent (focus, links, active)
-T_POS     = "#34A853"          # positive / profit
-T_NEG     = "#E53935"          # negative / loss
-T_WARN    = "#F9A825"          # warning / amber
-T_REF     = "#00BCD4"          # reference lines (live index, settlement)
+# ── Design tokens — single source of truth lives in theme.py ─────
+# theme.py owns the palette ONCE and also generates the CSS :root block
+# (see base_style() use below), so the Python constants and the CSS
+# variables can never drift apart. config.toml mirrors the four
+# Streamlit-native colours by hand (documented there).
+from theme import (
+    BG as T_BG, SURFACE as T_SURFACE, SURF2 as T_SURF2,
+    BORDER as T_BORDER, BORDER2 as T_BORDER2,
+    TEXT1 as T_TEXT1, TEXT2 as T_TEXT2, TEXT3 as T_TEXT3,
+    ACCENT as T_ACCENT, POS as T_POS, NEG as T_NEG,
+    WARN as T_WARN, REF as T_REF,
+    base_style,
+)
 
 # ── Backwards-compatible aliases (used throughout f-strings) ─────
 C_BG     = T_BG
@@ -79,7 +78,6 @@ C_GREEN  = T_POS
 C_RED    = T_NEG
 C_BLUE   = T_ACCENT
 C_YELLOW = T_WARN
-C_ORANGE = "#F57C00"
 
 DAY_HE = {
     "Monday": "שני", "Tuesday": "שלישי", "Wednesday": "רביעי",
@@ -89,32 +87,15 @@ DAY_HE = {
 # ==================================================================
 # GLOBAL CSS — design system
 # ==================================================================
+# Generated design tokens (:root vars) + base font rule — emitted from
+# theme.py so they always match the Python constants. Injected first so the
+# variables and font cascade into the static stylesheet that follows.
+st.markdown(f"<style>{base_style()}</style>", unsafe_allow_html=True)
+
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
-
-/* ── Tokens ──────────────────────────────────────────────────── */
-:root {
-  --bg:       #0B0D10;
-  --surface:  #111418;
-  --surf2:    #161B22;
-  --border:   rgba(255,255,255,0.07);
-  --border2:  rgba(255,255,255,0.12);
-  --text1:    #E8EAED;
-  --text2:    #9AA0A6;
-  --text3:    #5F6368;
-  --accent:   #00B0FF;
-  --pos:      #34A853;
-  --neg:      #E53935;
-  --warn:     #F9A825;
-  --ref:      #00BCD4;
-  --r-sm:     8px;
-  --r-md:     12px;
-}
-
 /* ── Base ────────────────────────────────────────────────────── */
 html, body, [class*="css"] {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
   font-weight: 400;
 }
 .main .block-container {
@@ -132,7 +113,7 @@ section[data-testid="stSidebar"] { direction: rtl; text-align: right; }
                                    { direction: rtl; text-align: right; }
 .metric-grid, .metric-card, .fresh-banner, .pnl-hero,
 .cmp-row, .dash-header, .stPlotlyChart,
-.chain-wrap, .table-scroll        { direction: ltr; text-align: left; }
+.chain-wrap                       { direction: ltr; text-align: left; }
 
 /* ── Sidebar ─────────────────────────────────────────────────── */
 [data-testid="collapsedControl"]  { display: none !important; }
@@ -194,8 +175,6 @@ section[data-testid="stSidebar"]  { min-width: 272px !important; }
 .metric-card .value.primary,.metric-card .value.white  { color: var(--text1); }
 .metric-card .value.muted                              { color: var(--text2); }
 .metric-card .value.ref                                { color: var(--ref);   }
-/* glow classes silently stripped — no decorative shadows */
-.metric-card.glow-green, .metric-card.glow-red        { /* flat */ }
 
 /* ── P&L hero ────────────────────────────────────────────────── */
 .pnl-hero {
@@ -210,35 +189,6 @@ section[data-testid="stSidebar"]  { min-width: 272px !important; }
 }
 .pnl-hero .amount.profit { color: var(--pos); }
 .pnl-hero .amount.loss   { color: var(--neg); }
-.pnl-hero.glow-profit, .pnl-hero.glow-loss { /* flat */ }
-
-/* ── HTML tables ─────────────────────────────────────────────── */
-.table-scroll {
-  overflow-x: auto; -webkit-overflow-scrolling: touch;
-  margin: 8px 0; border-radius: var(--r-sm);
-  border: 1px solid var(--border); background: var(--surface);
-}
-.table-scroll table {
-  width: 100%; min-width: 520px; border-collapse: separate;
-  border-spacing: 0; font-size: 13px; direction: ltr;
-  font-variant-numeric: tabular-nums;
-}
-.table-scroll th {
-  background: var(--surf2); color: var(--text2);
-  font-weight: 500; font-size: 11px; text-transform: uppercase;
-  letter-spacing: 0.4px; padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  text-align: right; white-space: nowrap;
-}
-.table-scroll td {
-  padding: 8px 14px; text-align: right;
-  border-bottom: 1px solid var(--border);
-  color: var(--text1); font-weight: 400;
-}
-.table-scroll tr:last-child td { border-bottom: none; }
-.table-scroll tr:hover td      { background: rgba(255,255,255,0.02); }
-.table-scroll .buy  { color: var(--pos); font-weight: 500; }
-.table-scroll .sell { color: var(--neg); font-weight: 500; }
 
 /* ── Status badge ────────────────────────────────────────────── */
 .badge {
@@ -1097,8 +1047,7 @@ def sandbox_trade_pnl(trade: dict, current_index: float) -> float:
 # SHARED RENDER HELPERS — used across all pages
 # ==================================================================
 
-def _card(label: str, value: str, color: str = "primary", glow: str = "") -> str:
-    # glow param kept for call-site backwards compat; ignored (flat design)
+def _card(label: str, value: str, color: str = "primary") -> str:
     return (
         f'<div class="metric-card">'
         f'<div class="label">{label}</div>'
