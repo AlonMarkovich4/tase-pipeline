@@ -10,3 +10,10 @@ credentials/
 .hypothesis/
 .pytest_cache/
 __pycache__/
+
+# macOS junk
+.DS_Store
+
+# one-off incident diagnostics (kept local, not product code)
+diag_raw_*.py
+diag_raw_*.json
