@@ -52,7 +52,7 @@ def send_message(text: str) -> bool:
     payload = {
         "chat_id":    _chat_id,
         "text":       text,
-        "parse_mode": "Markdown",
+        "parse_mode": "HTML",
     }
 
     last_err = ""
@@ -88,6 +88,17 @@ def send_message(text: str) -> bool:
     return False
 
 
+def _esc(s) -> str:
+    """Escape the three HTML-special characters for Telegram's HTML parse
+    mode. Apply to every DYNAMIC value put into a message — error strings,
+    dates, data-quality issues — so a stray <, > or & can't break the
+    formatting or get the whole message rejected (HTTP 400) by the Bot API.
+    Static template text and pre-formatted numbers don't need it."""
+    return (str(s).replace("&", "&amp;")
+                  .replace("<", "&lt;")
+                  .replace(">", "&gt;"))
+
+
 # ------------------------------------------------------------------
 # 1. CRASH ALERT
 # ------------------------------------------------------------------
@@ -95,13 +106,13 @@ def send_message(text: str) -> bool:
 def alert_crash(error_msg: str = ""):
     """3+ consecutive failures or unrecoverable error."""
     text = (
-        "\U0001F6A8 *TASE Pipeline — קריסה*\n"
+        "\U0001F6A8 <b>TASE Pipeline — קריסה</b>\n"
         "━━━━━━━━━━━━━━━\n"
         "המערכת זיהתה כשל חוזר.\n"
         "נא לבדוק Render Logs."
     )
     if error_msg:
-        text += f"\n`{error_msg[:200]}`"
+        text += f"\n<code>{_esc(error_msg[:200])}</code>"
     send_message(text)
 
 
@@ -114,9 +125,9 @@ def alert_data_quality(issues: list):
     `issues` is a list of human-readable Hebrew strings."""
     if not issues:
         return
-    body = "\n".join(f"• {s}" for s in issues[:6])
+    body = "\n".join(f"• {_esc(s)}" for s in issues[:6])
     text = (
-        "⚠️ *Pipeline — ירידה באיכות נתונים*\n"
+        "⚠️ <b>Pipeline — ירידה באיכות נתונים</b>\n"
         "━━━━━━━━━━━━━━━\n"
         f"{body}\n\n"
         "המערכת ממשיכה לרוץ — לבדיקה."
@@ -132,12 +143,13 @@ def alert_weekly_heartbeat(date_str: str, rows: int, expiries: int,
                            index_value: float = 0):
     """First-trading-day 'system alive' notification.
     Sent once per week after the first successful cycle."""
-    idx_line = f"\U0001F4CA TA-35: `{index_value:,.2f}`\n" if index_value > 0 else ""
+    idx_line = (f"\U0001F4CA TA-35: <code>{index_value:,.2f}</code>\n"
+                if index_value > 0 else "")
     text = (
-        f"✅ *Pipeline — תחילת שבוע*\n"
+        f"✅ <b>Pipeline — תחילת שבוע</b>\n"
         f"━━━━━━━━━━━━━━━\n"
         f"המערכת פעילה ואוספת נתונים.\n"
-        f"\U0001F4C5 {date_str}\n"
+        f"\U0001F4C5 {_esc(date_str)}\n"
         f"{idx_line}"
         f"\U0001F4C4 {rows:,} שורות | {expiries} פקיעות\n"
         f"\U0001F680 אסטרטגיות ישוגרו ב-12:00"
@@ -155,14 +167,14 @@ def alert_strategy_launch(base_index: float, strategies: list,
     Weekly strategy entry report.
     Shows base index + compact table of intervals for the nearest expiry.
     """
-    dates_str = ", ".join(expiry_dates)
+    dates_str = _esc(", ".join(expiry_dates))
     num_expiries = len(expiry_dates)
     num_total = len(strategies)
 
     text = (
-        f"\U0001F680 *Iron Condor — כניסה שבועית*\n"
+        f"\U0001F680 <b>Iron Condor — כניסה שבועית</b>\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"\U0001F4CA TA-35: `{base_index:,.2f}`\n"
+        f"\U0001F4CA TA-35: <code>{base_index:,.2f}</code>\n"
         f"\U0001F4C5 {num_expiries} פקיעות: {dates_str}\n\n"
     )
 
@@ -173,7 +185,7 @@ def alert_strategy_launch(base_index: float, strategies: list,
                    if s["expiry_date"] == nearest_exp]
         nearest.sort(key=lambda s: s["interval_pct"])
 
-        text += f"*פקיעה קרובה ({nearest_exp}):*\n"
+        text += f"<b>פקיעה קרובה ({_esc(nearest_exp)}):</b>\n"
         for s in nearest:
             pct = s["interval_pct"]
             sp = s["short_put_strike"]
@@ -182,11 +194,11 @@ def alert_strategy_launch(base_index: float, strategies: list,
             profit = s["max_profit_ils"]
             risk = s["max_risk_ils"]
             text += (
-                f"`{pct:>4.1f}%`"
-                f" | `{sp:.0f}`—`{sc:.0f}`"
-                f" | פרמיה `{prem:,.1f}` נק׳"
-                f" | +`{profit:,.0f}`₪"
-                f" / -`{risk:,.0f}`₪\n"
+                f"<code>{pct:>4.1f}%</code>"
+                f" | <code>{sp:.0f}</code>—<code>{sc:.0f}</code>"
+                f" | פרמיה <code>{prem:,.1f}</code> נק׳"
+                f" | +<code>{profit:,.0f}</code>₪"
+                f" / -<code>{risk:,.0f}</code>₪\n"
             )
 
     text += (
@@ -209,10 +221,10 @@ def alert_settlement(day_name: str, settlement_index: float,
             return 0
 
     text = (
-        f"\U0001F3C1 *פקיעה — יום {day_name}*\n"
+        f"\U0001F3C1 <b>פקיעה — יום {_esc(day_name)}</b>\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"\U0001F4CA סגירה: `{settlement_index:,.2f}`"
-        f" | כניסה: `{base_index:,.2f}`\n\n"
+        f"\U0001F4CA סגירה: <code>{settlement_index:,.2f}</code>"
+        f" | כניסה: <code>{base_index:,.2f}</code>\n\n"
     )
 
     for r in sorted(results, key=lambda x: _n(x.get("interval_pct", 0))):
@@ -228,7 +240,7 @@ def alert_settlement(day_name: str, settlement_index: float,
             "max_loss_call":     "❌",
         }.get(status, "❓")
 
-        text += f"{icon} `{pct:.1f}%` | `{pnl:+,.0f} ₪`\n"
+        text += f"{icon} <code>{pct:.1f}%</code> | <code>{pnl:+,.0f} ₪</code>\n"
 
     send_message(text)
 
@@ -244,14 +256,14 @@ def alert_daily_summary(date_str: str, cycles: int,
     status = "✅" if errors == 0 else f"⚠️ {errors} שגיאות"
 
     text = (
-        f"\U0001F4CB *סיכום יומי — {date_str}*\n"
+        f"\U0001F4CB <b>סיכום יומי — {_esc(date_str)}</b>\n"
         f"━━━━━━━━━━━━━━━\n"
         f"\U0001F504 סייקלים: {cycles}\n"
         f"\U0001F4C4 שורות: {rows_collected:,}\n"
         f"\U0001F4C5 פקיעות: {expiry_count}\n"
     )
     if index_value > 0:
-        text += f"\U0001F4CA TA-35: `{index_value:,.2f}`\n"
+        text += f"\U0001F4CA TA-35: <code>{index_value:,.2f}</code>\n"
     text += f"סטטוס: {status}"
 
     send_message(text)
@@ -283,22 +295,22 @@ def alert_weekly_summary(week_stats: dict):
     lines = []
     for pct, pnl in by_interval.items():
         icon = "✅" if pnl > 0 else ("➖" if pnl == 0 else "❌")
-        lines.append(f"{icon} {float(pct):.1f}% | `{_fmt_ils(pnl)} ₪`")
+        lines.append(f"{icon} {float(pct):.1f}% | <code>{_fmt_ils(pnl)} ₪</code>")
     breakdown = "\n".join(lines) if lines else "—"
 
     total_icon = "\U0001F4C8" if total_pnl >= 0 else "\U0001F4C9"
 
     text = (
-        f"\U0001F4CA *סיכום שבועי — TA-35*\n"
+        f"\U0001F4CA <b>סיכום שבועי — TA-35</b>\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"\U0001F3AF הצלחה: `{wr:.0f}%`"
+        f"\U0001F3AF הצלחה: <code>{wr:.0f}%</code>"
         f" ({wins}W/{losses}L מתוך {trades})\n"
-        f"{total_icon} סה\"כ השבוע: `{_fmt_ils(total_pnl)} ₪`\n\n"
-        f"*לפי מרווח:*\n"
+        f"{total_icon} סה\"כ השבוע: <code>{_fmt_ils(total_pnl)} ₪</code>\n\n"
+        f"<b>לפי מרווח:</b>\n"
         f"{breakdown}\n\n"
         f"\U0001F3C6 מוביל: {float(best_interval):.1f}% "
-        f"(`{_fmt_ils(week_stats.get('best_pnl', 0))} ₪`)\n"
+        f"(<code>{_fmt_ils(week_stats.get('best_pnl', 0))} ₪</code>)\n"
         f"\U0001F480 חלש: {float(worst_interval):.1f}% "
-        f"(`{_fmt_ils(week_stats.get('worst_pnl', 0))} ₪`)"
+        f"(<code>{_fmt_ils(week_stats.get('worst_pnl', 0))} ₪</code>)"
     )
     send_message(text)
