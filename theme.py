@@ -38,6 +38,17 @@ REF     = "#00BCD4"               # reference lines (live index, settlement)
 R_SM = "8px"
 R_MD = "12px"
 
+# ── Spacing scale (4-point grid) ─────────────────────────────────
+# The dominant padding/margin/gap values across the dashboard already sit on
+# this grid; these tokens name them so the rhythm is intentional and editable
+# in one place. Off-grid one-offs (6/10/14/20px fine-tuning) stay literal.
+SP_1 = "4px"
+SP_2 = "8px"
+SP_3 = "12px"
+SP_4 = "16px"
+SP_5 = "24px"
+SP_6 = "32px"
+
 # Self-hosted Inter — NO web-font CDN dependency. The woff2 files live in
 # static/fonts/ and are served by Streamlit's own static file server (needs
 # `enableStaticServing = true` in config.toml) under the app/static/ path.
@@ -113,6 +124,12 @@ def build_css_root() -> str:
   --ref:      {REF};
   --r-sm:     {R_SM};
   --r-md:     {R_MD};
+  --sp-1:     {SP_1};
+  --sp-2:     {SP_2};
+  --sp-3:     {SP_3};
+  --sp-4:     {SP_4};
+  --sp-5:     {SP_5};
+  --sp-6:     {SP_6};
 }}"""
 
 

@@ -99,7 +99,7 @@ html, body, [class*="css"] {
   font-weight: 400;
 }
 .main .block-container {
-  padding: 16px 24px 32px !important;
+  padding: var(--sp-4) var(--sp-5) var(--sp-6) !important;
   max-width: 1440px;
 }
 #MainMenu, footer, header { visibility: hidden; }
@@ -152,16 +152,16 @@ section[data-testid="stSidebar"]  { min-width: 272px !important; }
 
 /* ── Metric cards ────────────────────────────────────────────── */
 .metric-grid {
-  display: flex; gap: 12px; margin: 12px 0; flex-wrap: wrap;
+  display: flex; gap: var(--sp-3); margin: var(--sp-3) 0; flex-wrap: wrap;
 }
 .metric-card {
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r-md); padding: 16px 20px;
+  border-radius: var(--r-md); padding: var(--sp-4) 20px;
   flex: 1; min-width: 152px; text-align: center;
 }
 .metric-card .label {
   color: var(--text2); font-size: 11px; font-weight: 500;
-  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: var(--sp-2);
 }
 .metric-card .value {
   font-size: 22px; font-weight: 600; letter-spacing: -0.4px;
@@ -179,10 +179,10 @@ section[data-testid="stSidebar"]  { min-width: 272px !important; }
 /* ── P&L hero ────────────────────────────────────────────────── */
 .pnl-hero {
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r-md); padding: 32px 24px;
-  text-align: center; margin: 16px 0;
+  border-radius: var(--r-md); padding: var(--sp-6) var(--sp-5);
+  text-align: center; margin: var(--sp-4) 0;
 }
-.pnl-hero .title  { color: var(--text2); font-size: 13px; font-weight: 500; margin-bottom: 12px; }
+.pnl-hero .title  { color: var(--text2); font-size: 13px; font-weight: 500; margin-bottom: var(--sp-3); }
 .pnl-hero .amount {
   font-size: 40px; font-weight: 600; letter-spacing: -1px;
   font-variant-numeric: tabular-nums;
@@ -202,10 +202,10 @@ section[data-testid="stSidebar"]  { min-width: 272px !important; }
 /* ── Empty state ─────────────────────────────────────────────── */
 .empty-state {
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r-md); padding: 48px 24px;
-  text-align: center; margin: 12px 0;
+  border-radius: var(--r-md); padding: 48px var(--sp-5);
+  text-align: center; margin: var(--sp-3) 0;
 }
-.empty-state .es-icon  { font-size: 32px; margin-bottom: 8px; }
+.empty-state .es-icon  { font-size: 32px; margin-bottom: var(--sp-2); }
 .empty-state .es-title { color: var(--text1); font-size: 15px; font-weight: 500; }
 .empty-state .es-sub   { color: var(--text2); font-size: 13px; margin-top: 6px; }
 
@@ -227,7 +227,7 @@ section[data-testid="stSidebar"]  { min-width: 272px !important; }
 .section-hdr {
   color: var(--text2); font-size: 11px; font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.6px;
-  margin: 24px 0 12px; padding-bottom: 8px;
+  margin: var(--sp-5) 0 var(--sp-3); padding-bottom: var(--sp-2);
   border-bottom: 1px solid var(--border);
   direction: rtl; text-align: right;
 }
@@ -1178,16 +1178,16 @@ def render_expiry_metrics(row):
 
     # Row 1 — P&L metrics
     render_metric_row(
-        _card("Net Premium (pts)", fmt_num(net_prem), "pos" if net_prem > 0 else "neg"),
-        _card("Max Profit",        fmt_ils(max_profit), "pos"),
-        _card("Max Risk",          fmt_ils(-abs(max_risk)), "neg"),
-        _card("Risk / Reward",     rr_display, "primary"),
+        _card("פרמיה נטו (נק׳)", fmt_num(net_prem), "pos" if net_prem > 0 else "neg"),
+        _card("רווח מקסימלי",        fmt_ils(max_profit), "pos"),
+        _card("סיכון מקסימלי",          fmt_ils(-abs(max_risk)), "neg"),
+        _card("יחס סיכון/סיכוי",     rr_display, "primary"),
     )
     # Row 2 — Range metrics
     render_metric_row(
-        _card("BE Lower",  fmt_num(be_lower, 0), "primary"),
-        _card("BE Upper",  fmt_num(be_upper, 0), "primary"),
-        _card("DTE",       str(dte),             "accent"),
+        _card("איזון תחתון",  fmt_num(be_lower, 0), "primary"),
+        _card("איזון עליון",  fmt_num(be_upper, 0), "primary"),
+        _card("ימים לפקיעה",       str(dte),             "accent"),
     )
 
 
@@ -1552,8 +1552,8 @@ if nav_page == "📈 ביצועים":
         wr_color  = "pos" if win_rate >= 60 else ("warn" if win_rate >= 40 else "neg")
 
         render_metric_row(
-            _card("P&L מצטבר", fmt_ils(total_pnl), pnl_color),
-            _card("Win Rate", f"{win_rate:.0f}%", wr_color),
+            _card("רווח/הפסד מצטבר", fmt_ils(total_pnl), pnl_color),
+            _card("אחוז הצלחה", f"{win_rate:.0f}%", wr_color),
             _card("ניצול ממוצע", f"{avg_util:.0f}%", "accent"),
             _card("שבועות פעילים", str(n_weeks), "primary"),
         )
@@ -1878,7 +1878,7 @@ elif nav_page == "🏠 Home":
     pref_label = ("+".join(f"{p:.1f}%" for p in preferred)
                   if preferred else "כל המרווחים")
     render_metric_row(
-        _card("P&L שבועי (מסולק)", fmt_ils(week_pnl),  wk_color),
+        _card("רווח/הפסד שבועי (מסולק)", fmt_ils(week_pnl),  wk_color),
         _card("מרווח מוביל",        lead_txt,           "primary"),
         _card("פוזיציות דמו פתוחות", str(n_demo_open), "accent"),
         _card("תיק דמו",
@@ -1986,11 +1986,11 @@ elif nav_page == "🕹️ Demo Trading":
                 st.warning(metrics["price_warning"])
 
             render_metric_row(
-                _card("Net Premium (pts)", fmt_num(net_prem),
+                _card("פרמיה נטו (נק׳)", fmt_num(net_prem),
                       "pos" if net_prem > 0 else "neg"),
-                _card("Max Profit",  fmt_ils(max_profit), "pos"),
-                _card("Max Loss",    fmt_ils(max_loss),   "neg"),
-                _card("Breakeven(s)", be_str,             "primary"),
+                _card("רווח מקסימלי",  fmt_ils(max_profit), "pos"),
+                _card("הפסד מקסימלי",    fmt_ils(max_loss),   "neg"),
+                _card("נקודות איזון", be_str,             "primary"),
             )
 
             # ── Payoff chart (sandbox) — same token system as render_payoff_chart ──
@@ -2429,8 +2429,8 @@ elif nav_page == "🕹️ Demo Trading":
         render_metric_row(
             _card("הון מוקצה",    f"{portfolio_capital:,.0f} ₪",   "primary"),
             _card("יתרה",         f"{current_balance:,.0f} ₪",     bal_color),
-            _card("P&L כולל",     f"{fmt_ils(total_pnl_ils)} ({pct_str})", bal_color),
-            _card("P&L לא ממומש", fmt_ils(total_unrealized),        unr_color),
+            _card("רווח/הפסד כולל",     f"{fmt_ils(total_pnl_ils)} ({pct_str})", bal_color),
+            _card("רווח/הפסד לא ממומש", fmt_ils(total_unrealized),        unr_color),
             _card("פתוחות",       str(len(open_trades)),            "accent"),
         )
 
@@ -2545,8 +2545,8 @@ elif nav_page == "🕹️ Demo Trading":
                 pnl_cols = st.columns([2, 1])
                 with pnl_cols[0]:
                     render_metric_row(
-                        _card("P&L לא ממומש", fmt_ils(t_pnl),      pnl_color),
-                        _card("Max Profit",    fmt_ils(t_max_profit), "accent"),
+                        _card("רווח/הפסד לא ממומש", fmt_ils(t_pnl),      pnl_color),
+                        _card("רווח מקסימלי",    fmt_ils(t_max_profit), "accent"),
                     )
                 with pnl_cols[1]:
                     if st.button(f"🔒 סגור #{t_id}", key=f"sb_close_{t_id}",
@@ -2660,12 +2660,12 @@ elif has_strategies:
         week_status = '<span class="badge active">PARTIALLY ACTIVE</span>'
 
     render_metric_row(
-        _card("Run Date",    trigger_date,         "primary"),
-        _card("Run Time",    trigger_time,         "primary"),
-        _card("Entry Index", fmt_num(base_index),  "warn"),
-        _card("Strategies",  str(n_total_week),    "primary"),
+        _card("תאריך הרצה",    trigger_date,         "primary"),
+        _card("שעת הרצה",    trigger_time,         "primary"),
+        _card("מדד כניסה", fmt_num(base_index),  "warn"),
+        _card("אסטרטגיות",  str(n_total_week),    "primary"),
         # Status holds a badge, not a plain value — pass raw card markup.
-        f'<div class="metric-card"><div class="label">Status</div>'
+        f'<div class="metric-card"><div class="label">סטטוס</div>'
         f'<div style="margin-top:6px">{week_status}</div></div>',
     )
 
@@ -2731,10 +2731,10 @@ elif has_strategies:
                 unr_color = "pos" if u_pnl >= 0 else "neg"
                 method_label = "LIVE" if u_method == "live" else "PROXY"
                 render_metric_row(
-                    _card("Live Index", fmt_num(live_index), idx_color),
-                    _card("Change from Entry",
+                    _card("מדד חי", fmt_num(live_index), idx_color),
+                    _card("שינוי מכניסה",
                           f"{fmt_num(chg_val)} ({chg_pct:+.2f}%)", idx_color),
-                    _card(f"Unrealized P&L ({method_label})",
+                    _card(f"רווח/הפסד לא ממומש ({method_label})",
                           fmt_ils(u_pnl), unr_color),
                 )
 
@@ -2894,7 +2894,7 @@ elif has_strategies:
                     f'<div class="metric-grid">'
                     f'<div class="metric-card"><div class="label">תוצאה</div>'
                     f'<div style="margin-top:8px"><span class="badge active">⏳ ממתין לסליקה</span></div></div>'
-                    f'<div class="metric-card"><div class="label">Max Possible</div>'
+                    f'<div class="metric-card"><div class="label">מקסימום אפשרי</div>'
                     f'<div class="value blue">{fmt_ils(max_profit)}</div></div>'
                     f'<div class="metric-card"><div class="label">פקיעה</div>'
                     f'<div class="value white">{sel_hist_expiry}</div></div>'
@@ -2904,10 +2904,10 @@ elif has_strategies:
             else:
                 st.markdown(
                     f'<div class="metric-grid">'
-                    f'<div class="metric-card"><div class="label">Settlement Index</div><div class="value white">{fmt_num(settle_price)}</div></div>'
-                    f'<div class="metric-card"><div class="label">Position</div><div style="margin-top:8px">{zone_badge}</div></div>'
-                    f'<div class="metric-card"><div class="label">Actual P&L</div><div class="value {a_color}">{fmt_ils(actual_pnl)}</div></div>'
-                    f'<div class="metric-card"><div class="label">Max Possible</div><div class="value blue">{fmt_ils(max_profit)}</div></div>'
+                    f'<div class="metric-card"><div class="label">מדד סליקה</div><div class="value white">{fmt_num(settle_price)}</div></div>'
+                    f'<div class="metric-card"><div class="label">אזור</div><div style="margin-top:8px">{zone_badge}</div></div>'
+                    f'<div class="metric-card"><div class="label">רווח/הפסד בפועל</div><div class="value {a_color}">{fmt_ils(actual_pnl)}</div></div>'
+                    f'<div class="metric-card"><div class="label">מקסימום אפשרי</div><div class="value blue">{fmt_ils(max_profit)}</div></div>'
                     f'<div class="metric-card"><div class="label">תוצאה</div><div style="margin-top:8px">{_status_badge_html}</div></div>'
                     f'</div>', unsafe_allow_html=True)
 
@@ -2953,14 +2953,14 @@ elif has_strategies:
                 pnl_class = "profit" if actual_pnl >= 0 else "loss"
                 st.markdown(
                     f'<div class="pnl-hero">'
-                    f'<div class="title">Settlement Result — {sel_hist_expiry} @ {sel_hist_interval:.1f}%</div>'
+                    f'<div class="title">תוצאת סליקה — {sel_hist_expiry} @ {sel_hist_interval:.1f}%</div>'
                     f'<div class="amount {pnl_class}">{fmt_ils(actual_pnl)}</div>'
-                    f'<div style="color:{T_TEXT2};font-size:13px;margin-top:8px">out of max possible: {fmt_ils(max_profit)}</div>'
+                    f'<div style="color:{T_TEXT2};font-size:13px;margin-top:8px">מתוך מקסימום אפשרי: {fmt_ils(max_profit)}</div>'
                     f'</div>', unsafe_allow_html=True)
             else:
                 st.markdown(
                     f'<div class="pnl-hero">'
-                    f'<div class="title">Settlement Result — {sel_hist_expiry} @ {sel_hist_interval:.1f}%</div>'
+                    f'<div class="title">תוצאת סליקה — {sel_hist_expiry} @ {sel_hist_interval:.1f}%</div>'
                     f'<div class="amount" style="color:{T_WARN};">⏳ ממתין לסליקה</div>'
                     f'<div style="color:{T_TEXT2};font-size:13px;margin-top:8px">אין מחיר סליקה אמין — P&L יוצג לאחר סליקה</div>'
                     f'</div>', unsafe_allow_html=True)
