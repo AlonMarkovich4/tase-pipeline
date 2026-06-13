@@ -49,6 +49,7 @@ def test_golden_symmetric_condor():
     assert abs(r["breakeven_lower"]   - 1977.0) < TOL
     assert abs(r["risk_reward_ratio"] - round(850/150, 4)) < 1e-4
     assert r["premium_flag"] == ""
+    assert r["days_to_expiry"] == 4   # 2026-06-06 − 2026-06-02 (migrated from the root benchmark)
 
 
 # ── Golden 2: invariant — max_profit == net_premium × multiplier ──────────

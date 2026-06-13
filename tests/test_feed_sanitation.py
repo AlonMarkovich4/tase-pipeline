@@ -14,6 +14,8 @@ import os
 import json
 import datetime as _dt
 
+import pytest
+
 import tase_api
 from config import TRADING_DAYS
 
@@ -50,6 +52,9 @@ def test_diag_fixture_drops_junk_rows():
     Every kept row carries a real strike.
     """
     path = os.path.join(_REPO, "diag_raw_response.json")
+    if not os.path.exists(path):
+        pytest.skip("diag_raw_response.json not present "
+                    "(gitignored sample feed — absent in a fresh checkout/CI)")
     items = json.load(open(path))["Items"]
     kept = [it for it in items if tase_api._is_real_option_row(it)]
     assert len(items) - len(kept) == 2            # placeholder + empty row
