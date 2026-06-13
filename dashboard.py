@@ -112,7 +112,7 @@ section[data-testid="stSidebar"] { direction: rtl; text-align: right; }
 .stRadio label, .stSelectbox label, .stMultiSelect label
                                    { direction: rtl; text-align: right; }
 .metric-grid, .metric-card, .fresh-banner, .pnl-hero,
-.cmp-row, .dash-header, .stPlotlyChart,
+.dash-header, .stPlotlyChart,
 .chain-wrap                       { direction: ltr; text-align: left; }
 
 /* ── Sidebar ─────────────────────────────────────────────────── */
@@ -249,24 +249,6 @@ section[data-testid="stSidebar"]  { min-width: 272px !important; }
   background: rgba(0,176,255,.1); border-color: var(--accent); color: var(--accent);
 }
 .step-breadcrumb .sep { color: var(--border2); }
-
-/* ── Comparison bar ──────────────────────────────────────────── */
-.cmp-row {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r-sm); padding: 12px 16px; margin: 6px 0;
-}
-.cmp-line         { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
-.cmp-line .cmp-lbl { color: var(--text2); font-size: 11px; min-width: 52px; }
-.cmp-line .cmp-track {
-  flex: 1; height: 4px; background: rgba(255,255,255,0.06);
-  border-radius: 2px; overflow: hidden;
-}
-.cmp-line .cmp-fill  { height: 100%; border-radius: 2px; }
-.cmp-line .cmp-val {
-  min-width: 80px; text-align: right;
-  font-weight: 500; font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
 
 /* ── Strike zone badge ───────────────────────────────────────── */
 .strike-zone { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
@@ -1600,7 +1582,7 @@ if nav_page == "📈 ביצועים":
         ))
         fig_eq.add_hline(y=0, line=dict(color="rgba(255,255,255,0.15)", width=1))
         fig_eq.update_layout(
-            template="plotly_dark", paper_bgcolor=C_BG, plot_bgcolor=C_BG,
+            template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             height=320, margin=dict(l=60, r=20, t=20, b=50),
             xaxis=dict(gridcolor="rgba(255,255,255,0.04)",
                        tickfont=dict(size=10, color=C_DIM), tickangle=-30),
@@ -1641,7 +1623,7 @@ if nav_page == "📈 ביצועים":
                 hovertemplate="%{x}: %{y} עסקאות<extra></extra>",
             ))
             fig_dist.update_layout(
-                template="plotly_dark", paper_bgcolor=C_BG, plot_bgcolor=C_BG,
+                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 height=260, margin=dict(l=40, r=20, t=30, b=40),
                 xaxis=dict(gridcolor="rgba(255,255,255,0.04)",
                            tickfont=dict(size=12, color=C_TEXT)),
@@ -2677,14 +2659,15 @@ elif has_strategies:
     else:
         week_status = '<span class="badge active">PARTIALLY ACTIVE</span>'
 
-    st.markdown(
-        f'<div class="metric-grid">'
-        f'<div class="metric-card"><div class="label">Run Date</div><div class="value white">{trigger_date}</div></div>'
-        f'<div class="metric-card"><div class="label">Run Time</div><div class="value white">{trigger_time}</div></div>'
-        f'<div class="metric-card"><div class="label">Entry Index</div><div class="value yellow">{fmt_num(base_index)}</div></div>'
-        f'<div class="metric-card"><div class="label">Strategies</div><div class="value white">{n_total_week}</div></div>'
-        f'<div class="metric-card"><div class="label">Status</div><div style="margin-top:6px">{week_status}</div></div>'
-        f'</div>', unsafe_allow_html=True)
+    render_metric_row(
+        _card("Run Date",    trigger_date,         "primary"),
+        _card("Run Time",    trigger_time,         "primary"),
+        _card("Entry Index", fmt_num(base_index),  "warn"),
+        _card("Strategies",  str(n_total_week),    "primary"),
+        # Status holds a badge, not a plain value — pass raw card markup.
+        f'<div class="metric-card"><div class="label">Status</div>'
+        f'<div style="margin-top:6px">{week_status}</div></div>',
+    )
 
     all_active = week_all[~week_all["_is_settled"]]
     all_history = week_all[week_all["_is_settled"]]
@@ -2712,12 +2695,11 @@ elif has_strategies:
                         total_unr += val
                 interval_pnl_active.append({"pct": pct, "n": len(idf), "pnl": total_unr})
 
-            summary_html = '<div class="metric-grid">'
-            for ip in interval_pnl_active:
-                u_color = "pos" if ip["pnl"] >= 0 else "neg"
-                summary_html += f'<div class="metric-card"><div class="label">{ip["pct"]:.1f}% ({ip["n"]})</div><div class="value {u_color}">{fmt_ils(ip["pnl"])}</div></div>'
-            summary_html += '</div>'
-            st.markdown(summary_html, unsafe_allow_html=True)
+            render_metric_row(*[
+                _card(f'{ip["pct"]:.1f}% ({ip["n"]})', fmt_ils(ip["pnl"]),
+                      "pos" if ip["pnl"] >= 0 else "neg")
+                for ip in interval_pnl_active
+            ])
 
             active_expiry_dates = sorted(all_active["expiry_date"].unique())
             active_expiry_labels = {}
@@ -2748,12 +2730,13 @@ elif has_strategies:
                 u_pnl, u_method = compute_unrealized_pnl(row, live_index)
                 unr_color = "pos" if u_pnl >= 0 else "neg"
                 method_label = "LIVE" if u_method == "live" else "PROXY"
-                st.markdown(
-                    f'<div class="metric-grid">'
-                    f'<div class="metric-card"><div class="label">Live Index</div><div class="value {idx_color}">{fmt_num(live_index)}</div></div>'
-                    f'<div class="metric-card"><div class="label">Change from Entry</div><div class="value {idx_color}">{fmt_num(chg_val)} ({chg_pct:+.2f}%)</div></div>'
-                    f'<div class="metric-card"><div class="label">Unrealized P&L ({method_label})</div><div class="value {unr_color}">{fmt_ils(u_pnl)}</div></div>'
-                    f'</div>', unsafe_allow_html=True)
+                render_metric_row(
+                    _card("Live Index", fmt_num(live_index), idx_color),
+                    _card("Change from Entry",
+                          f"{fmt_num(chg_val)} ({chg_pct:+.2f}%)", idx_color),
+                    _card(f"Unrealized P&L ({method_label})",
+                          fmt_ils(u_pnl), unr_color),
+                )
 
             render_legs_table(row)
             render_expiry_metrics(row)
@@ -2847,20 +2830,6 @@ elif has_strategies:
                     },
                     hide_index=True,
                 )
-
-                render_section_header("📈 Max Profit vs. Actual P&L")
-                abs_max = max(max(abs(cd["max_possible"]), abs(cd["actual_pnl"]))
-                              for cd in comparison_data) if comparison_data else 1
-                for cd in comparison_data:
-                    max_w = (cd["max_possible"] / abs_max * 100) if abs_max > 0 else 0
-                    actual_w = (abs(cd["actual_pnl"]) / abs_max * 100) if abs_max > 0 else 0
-                    bar_c = C_GREEN if cd["actual_pnl"] >= 0 else C_RED
-                    st.markdown(
-                        f'<div class="cmp-row">'
-                        f'<div style="font-weight:600;color:{T_TEXT1};font-size:14px;margin-bottom:6px;font-variant-numeric:tabular-nums;">{cd["pct"]:.1f}%</div>'
-                        f'<div class="cmp-line"><span class="cmp-lbl">Max</span><div class="cmp-track"><div class="cmp-fill" style="width:{max_w:.0f}%;background:{T_ACCENT}"></div></div><span class="cmp-val" style="color:{T_ACCENT}">{fmt_ils(cd["max_possible"])}</span></div>'
-                        f'<div class="cmp-line"><span class="cmp-lbl">Actual</span><div class="cmp-track"><div class="cmp-fill" style="width:{actual_w:.0f}%;background:{bar_c}"></div></div><span class="cmp-val" style="color:{bar_c}">{fmt_ils(cd["actual_pnl"])}</span></div>'
-                        f'</div>', unsafe_allow_html=True)
 
             render_section_header("🔍 ניתוח מפורט לפי פקיעה ומרווח")
 
