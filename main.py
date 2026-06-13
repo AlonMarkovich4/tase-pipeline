@@ -352,6 +352,22 @@ def _fetch_all_pages(page, expr_date_iso: str):
     return all_items, trade_date, asset_name, underlying_value
 
 
+def _keep_real_option_rows(items: list) -> list:
+    """#6 feed sanitation on the PRODUCTION path.
+
+    Drops TASE's series-header / placeholder rows (no strike on either side —
+    rowtype 001, empty derivativeids) BEFORE they are written, so neither the
+    live table nor the EOD history copy (copy_to_history reads from the live
+    table) ever stores them.
+
+    Delegates to ``tase_api._is_real_option_row`` — the SAME predicate the
+    sanitised tase_api fetch path uses — so the filter logic stays in one
+    place. (Previously it lived only in tase_api.py, which main.py's fetch
+    path does not use, so the junk reached the DB unfiltered.)
+    """
+    return [it for it in items if tase_api._is_real_option_row(it)]
+
+
 # ------------------------------------------------------------------
 # Single fetch cycle
 # ------------------------------------------------------------------
@@ -396,6 +412,12 @@ def run_cycle(page, cycle_time: datetime):
         items, trade_dt, asset, underlying = _fetch_all_pages(
             page, exp_iso,
         )
+        # #6 feed sanitation on the production path: drop TASE's header/
+        # placeholder rows at the source so they never reach the live table
+        # (or the EOD history copy taken from it). Same shared predicate as
+        # tase_api. If a page is ONLY header rows it becomes empty here and
+        # falls through to the no-trading branch below — the correct semantic.
+        items = _keep_real_option_rows(items)
 
         # If TASE actually provided a real underlying, prefer it (it's
         # the authoritative exchange value).

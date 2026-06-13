@@ -61,6 +61,32 @@ def test_diag_fixture_drops_junk_rows():
                     "ExpirationPrice_put", "ExpirationPrice_Put"))
 
 
+# ── #6 on the PRODUCTION path: main.py applies the SAME shared filter ─────────
+def test_main_production_path_filters_header_rows():
+    """main.py's fetch->write path drops TASE header/placeholder rows via the
+    SHARED tase_api._is_real_option_row, so neither the live table nor the EOD
+    history copy (taken from it) stores them. Mirrors the real junk shape:
+    rowtype 001, empty strikes + empty derivativeids, only a series name."""
+    import main
+    header = {"RowType": "001",
+              "ExpirationPrice_Call": "", "ExpirationPrice_Put": "",
+              "DerivativeId_Call": "", "DerivativeId_Put": "",
+              "DerivativeName_Put": "14/06/2026 - שבועי"}
+    real_call = {"ExpirationPrice_Call": "4200", "DerivativeId_Call": "123"}
+    real_put  = {"ExpirationPrice_Put": "4000", "DerivativeId_Put": "456"}
+    kept = main._keep_real_option_rows([header, real_call, real_put])
+    assert kept == [real_call, real_put]   # only the real rows survive
+    assert header not in kept              # the empty header row is filtered
+
+
+def test_main_filter_wired_before_write():
+    """Guard: run_cycle applies the filter to the fetched page, and the helper
+    delegates to the shared predicate (no duplicated filter logic)."""
+    src = open(os.path.join(_REPO, "main.py"), encoding="utf-8").read()
+    assert "_keep_real_option_rows(items)" in src        # applied in run_cycle
+    assert "tase_api._is_real_option_row(it)" in src     # delegates to the shared filter
+
+
 # ── #5: non-trading-day expiry filter ────────────────────────────────────────
 def test_sunday_is_not_a_trading_day():
     assert _dt.date(2026, 6, 14).weekday() == 6      # Sunday
