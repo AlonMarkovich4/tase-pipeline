@@ -232,24 +232,6 @@ section[data-testid="stSidebar"]  { min-width: 272px !important; }
   direction: rtl; text-align: right;
 }
 
-/* ── Breadcrumb ──────────────────────────────────────────────── */
-.step-breadcrumb { display: flex; align-items: center; gap: 6px; margin: 12px 0 8px; direction: rtl; }
-.step-breadcrumb .crumb {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 12px; font-weight: 400; color: var(--text2);
-}
-.step-breadcrumb .crumb.active { color: var(--accent); }
-.step-breadcrumb .num {
-  width: 20px; height: 20px; border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 11px; background: var(--surface);
-  border: 1px solid var(--border); color: var(--text2); flex-shrink: 0;
-}
-.step-breadcrumb .crumb.active .num {
-  background: rgba(0,176,255,.1); border-color: var(--accent); color: var(--accent);
-}
-.step-breadcrumb .sep { color: var(--border2); }
-
 /* ── Strike zone badge ───────────────────────────────────────── */
 .strike-zone { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
 .strike-zone.in       { background: rgba(52,168,83,.12);  color: var(--pos); }
@@ -1191,15 +1173,6 @@ def render_expiry_metrics(row):
     )
 
 
-def render_breadcrumb(steps: list):
-    parts = []
-    for i, (label, active) in enumerate(steps):
-        cls = "crumb active" if active else "crumb"
-        parts.append(f'<span class="{cls}"><span class="num">{i+1}</span>{label}</span>')
-    html = '<div class="step-breadcrumb">' + '<span class="sep">‹</span>'.join(parts) + '</div>'
-    st.markdown(html, unsafe_allow_html=True)
-
-
 # ==================================================================
 # STRATEGY TEMPLATES (Sandbox)
 # ==================================================================
@@ -1733,8 +1706,6 @@ elif nav_page == "🏠 Home":
             medal = medals[i] if i < len(medals) else "•"
             top_cls = " top" if i == 0 else ""
             _win_bar = min(100.0, item["win"] * 100)
-            _rew_bar = min(100.0, max(0.0,
-                           (item["score"] - item["win"] * 60) / 40 * 100))
             st.markdown(
                 f'<div class="rec-card{top_cls}">'
                 # ── header row ──
@@ -1750,32 +1721,11 @@ elif nav_page == "🏠 Home":
                 f'<span style="color:{T_TEXT1};font-size:13px;font-weight:500;'
                 f'font-variant-numeric:tabular-nums;">{item["score"]}<span style="color:{T_TEXT3};'
                 f'font-weight:400;font-size:11px;">/100</span></span>'
+                f'<span style="font-variant-numeric:tabular-nums;">סיכוי {_win_bar:.0f}%</span>'
                 f'<span style="font-variant-numeric:tabular-nums;">{prem:,.1f} pts</span>'
                 f'<span style="color:{T_POS};font-variant-numeric:tabular-nums;">+{mprofit:,.0f} ₪</span>'
                 f'<span style="color:{T_NEG};font-variant-numeric:tabular-nums;">−{mrisk:,.0f} ₪</span>'
                 f'</div></div>'
-                # ── score breakdown bars ──
-                f'<div style="margin-top:10px;padding-top:10px;'
-                f'border-top:1px solid var(--border);direction:ltr;">'
-                f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;">'
-                f'<span style="color:{T_TEXT3};font-size:11px;min-width:112px;">'
-                f'סיכוי הצלחה (60%)</span>'
-                f'<div style="flex:1;height:3px;background:var(--border);border-radius:2px;">'
-                f'<div style="width:{_win_bar:.0f}%;height:100%;background:{T_POS};'
-                f'border-radius:2px;"></div></div>'
-                f'<span style="color:{T_POS};font-size:11px;min-width:32px;text-align:right;'
-                f'font-variant-numeric:tabular-nums;">{_win_bar:.0f}%</span>'
-                f'</div>'
-                f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;">'
-                f'<span style="color:{T_TEXT3};font-size:11px;min-width:112px;">'
-                f'תשואה יחסית (40%)</span>'
-                f'<div style="flex:1;height:3px;background:var(--border);border-radius:2px;">'
-                f'<div style="width:{_rew_bar:.0f}%;height:100%;background:{T_ACCENT};'
-                f'border-radius:2px;"></div></div>'
-                f'<span style="color:{T_ACCENT};font-size:11px;min-width:32px;text-align:right;'
-                f'font-variant-numeric:tabular-nums;">{_rew_bar:.0f}%</span>'
-                f'</div>'
-                f'</div>'
                 f'</div>', unsafe_allow_html=True)
             dname = f"IC {pct:.1f}% (auto)"
             in_demo = (str(rec_meta["expiry"]), dname) in _open_demo_keys
@@ -2636,7 +2586,6 @@ elif has_strategies:
         .sort_values("_trigger_dt", ascending=False)
     )["_week_label"].tolist()
 
-    render_breadcrumb([("שבוע מסחר", True)])
     selected_week = st.selectbox("📅 שבוע מסחר / תאריך הרצה", week_options, index=0,
                                   label_visibility="collapsed")
 
@@ -2709,14 +2658,12 @@ elif has_strategies:
                 n_intervals = len(edf["interval_pct"].unique())
                 active_expiry_labels[ed] = f"{ed} — יום {day_he}  |  {n_intervals} מרווחים"
 
-            render_breadcrumb([("שבוע", False), ("תאריך פקיעה", True)])
             sel_active_expiry = st.selectbox("📅 תאריך פקיעה", active_expiry_dates,
                                               format_func=lambda x: active_expiry_labels.get(x, x),
                                               key="active_expiry")
             active_by_expiry = all_active[all_active["expiry_date"] == sel_active_expiry]
 
             avail_intervals = sorted(active_by_expiry["interval_pct"].unique())
-            render_breadcrumb([("שבוע", False), ("פקיעה", False), ("מרווח", True)])
             sel_active_interval = st.selectbox("📐 מרווח אסטרטגיה", avail_intervals,
                                                 format_func=lambda x: f"{x:.1f}%",
                                                 key="active_interval")
@@ -2725,15 +2672,17 @@ elif has_strategies:
 
             if live_index > 0:
                 idx_color = "pos" if live_index >= base_index else "neg"
+                # Direction arrow so up/down isn't conveyed by colour alone.
+                arrow = "▲" if live_index >= base_index else "▼"
                 chg_val = live_index - base_index
                 chg_pct = chg_val / base_index * 100 if base_index > 0 else 0
                 u_pnl, u_method = compute_unrealized_pnl(row, live_index)
                 unr_color = "pos" if u_pnl >= 0 else "neg"
                 method_label = "LIVE" if u_method == "live" else "PROXY"
                 render_metric_row(
-                    _card("מדד חי", fmt_num(live_index), idx_color),
+                    _card("מדד חי", f"{arrow} {fmt_num(live_index)}", idx_color),
                     _card("שינוי מכניסה",
-                          f"{fmt_num(chg_val)} ({chg_pct:+.2f}%)", idx_color),
+                          f"{arrow} {fmt_num(chg_val)} ({chg_pct:+.2f}%)", idx_color),
                     _card(f"רווח/הפסד לא ממומש ({method_label})",
                           fmt_ils(u_pnl), unr_color),
                 )
@@ -2842,14 +2791,12 @@ elif has_strategies:
                 icon = "✅" if total_pnl_day > 0 else "❌"
                 hist_expiry_labels[ed] = f"{ed} — {day_he}  |  {icon} {fmt_ils(total_pnl_day)}"
 
-            render_breadcrumb([("שבוע", False), ("תאריך פקיעה", True)])
             sel_hist_expiry = st.selectbox("📅 תאריך פקיעה", hist_expiry_dates,
                                             format_func=lambda x: hist_expiry_labels.get(x, x),
                                             key="history_expiry")
             hist_by_expiry = all_history[all_history["expiry_date"] == sel_hist_expiry]
 
             hist_avail_intervals = sorted(hist_by_expiry["interval_pct"].unique())
-            render_breadcrumb([("שבוע", False), ("פקיעה", False), ("מרווח", True)])
             sel_hist_interval = st.selectbox("📐 מרווח אסטרטגיה", hist_avail_intervals,
                                               format_func=lambda x: f"{x:.1f}%",
                                               key="history_interval")
