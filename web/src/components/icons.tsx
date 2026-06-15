@@ -19,6 +19,7 @@ export const Logout = base(<><path d="M15 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"
 export const Sun = base(<><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>);
 export const Refresh = base(<><path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" /></>);
 export const ArrowLeft = base(<path d="M19 12H5m6-7-7 7 7 7" />);
+export const ChevronDown = base(<path d="m6 9 6 6 6-6" />);
 export const Wallet = base(<><path d="M3 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v0H5a2 2 0 0 0-2 2v0" /><path d="M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><circle cx="16.5" cy="13" r="1.3" /></>);
 export const Star = base(<path d="m12 3 2.6 5.6 6.1.6-4.6 4 1.4 6L12 18.3 6.5 19.2l1.4-6-4.6-4 6.1-.6Z" />);
 export const Shield = base(<path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6Z" />);

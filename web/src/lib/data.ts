@@ -125,3 +125,112 @@ export async function getLastUpdate(): Promise<Freshness> {
   const tone: Freshness["tone"] = agoMin <= 30 ? "pos" : agoMin <= 120 ? "warn" : "neg";
   return { label: `${d}/${m} ${ft}`, agoMin, tone };
 }
+
+// ── Options simulator ─────────────────────────────────────────────────
+export const MULT = 50; // ₪ per index point per contract (TASE TA-35)
+
+export type ChainRow = {
+  strike: number;
+  callPx: number; // ₪ (lastrate)
+  putPx: number;
+  callDelta: number;
+  putDelta: number;
+};
+export type ExpiryChain = {
+  date: string;
+  dayName: string;
+  days: number;
+  spot: number;
+  rows: ChainRow[];
+};
+
+const DAYS_HE = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
+const nowIsrael = () =>
+  new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+function dayNameHe(iso: string) {
+  return DAYS_HE[new Date(`${iso}T00:00:00`).getDay()] ?? "";
+}
+function daysTo(iso: string) {
+  const t = new Date(`${iso}T00:00:00`).getTime();
+  const n = nowIsrael(); n.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.round((t - n.getTime()) / 86400000));
+}
+
+/** Live option chain per expiry (latest snapshot), for the simulator. */
+export async function getSimulatorData(): Promise<ExpiryChain[]> {
+  const { current: spot } = await getIndexData();
+  const exps = await sb<Record<string, unknown>>("tase_putcall?select=expiry_date&order=expiry_date");
+  const dates = [...new Set(exps.map((e) => String(e.expiry_date)).filter(Boolean))].sort();
+
+  const out: ExpiryChain[] = [];
+  for (const d of dates) {
+    const latest = await sb<Record<string, unknown>>(
+      `tase_putcall?select=fetch_date,fetch_time&expiry_date=eq.${d}&order=id.desc&limit=1`,
+    );
+    const fd = latest[0]?.fetch_date, ft = latest[0]?.fetch_time;
+    if (!fd || !ft) continue;
+    const raw = await sb<Record<string, unknown>>(
+      `tase_putcall?select=expirationprice_call,lastrate_call,lastrate_put,delta_call,delta_put` +
+        `&expiry_date=eq.${d}&fetch_date=eq.${fd}&fetch_time=eq.${ft}&order=expirationprice_call`,
+    );
+    const rows: ChainRow[] = raw
+      .map((r) => ({
+        strike: num(r.expirationprice_call) ?? 0,
+        callPx: num(r.lastrate_call) ?? 0,
+        putPx: num(r.lastrate_put) ?? 0,
+        callDelta: num(r.delta_call) ?? 0,
+        putDelta: num(r.delta_put) ?? 0,
+      }))
+      .filter((r) => r.strike >= 1000)
+      .sort((a, b) => a.strike - b.strike);
+    out.push({ date: d, dayName: dayNameHe(d), days: daysTo(d), spot, rows });
+  }
+  return out;
+}
+
+// ── Demo paper-trading book ───────────────────────────────────────────
+export type DemoLeg = { kind: "call" | "put"; strike: number; side: 1 | -1; qty: number; entryPx: number };
+export type DemoTrade = {
+  tradeId: string;
+  strategyName: string;
+  expiryDate: string;
+  status: string;
+  legs: DemoLeg[];
+  entryIndex: number | null;
+  netPremiumPts: number | null;
+  maxProfitIls: number | null;
+  maxRiskIls: number | null;
+  settlementIndex: number | null;
+  pnlIls: number | null;
+  closeReason: string | null;
+  createdAt: string | null;
+};
+export type DemoBook = { balance: number | null; balanceUpdated: string | null; trades: DemoTrade[] };
+
+/** Demo book: latest balance + all paper trades (newest first). */
+export async function getDemoBook(): Promise<DemoBook> {
+  const [bal, rows] = await Promise.all([
+    sb<Record<string, unknown>>("demo_balance?select=balance,updated_at&order=updated_at.desc&limit=1"),
+    sb<Record<string, unknown>>("demo_trades?select=*&order=created_at.desc"),
+  ]);
+  const trades: DemoTrade[] = rows.map((r) => ({
+    tradeId: String(r.trade_id ?? r.id ?? ""),
+    strategyName: String(r.strategy_name ?? "—"),
+    expiryDate: String(r.expiry_date ?? ""),
+    status: String(r.status ?? "open"),
+    legs: Array.isArray(r.legs) ? (r.legs as DemoLeg[]) : [],
+    entryIndex: num(r.entry_index),
+    netPremiumPts: num(r.net_premium_pts),
+    maxProfitIls: num(r.max_profit_ils),
+    maxRiskIls: num(r.max_risk_ils),
+    settlementIndex: num(r.settlement_index),
+    pnlIls: num(r.pnl_ils),
+    closeReason: r.close_reason ? String(r.close_reason) : null,
+    createdAt: r.created_at ? String(r.created_at) : null,
+  }));
+  return {
+    balance: num(bal[0]?.balance),
+    balanceUpdated: bal[0]?.updated_at ? String(bal[0].updated_at) : null,
+    trades,
+  };
+}
