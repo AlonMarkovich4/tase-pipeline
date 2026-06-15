@@ -72,15 +72,36 @@ const FALLBACK_SERIES: IndexPoint[] = [
 
 export type Kpi = { label: string; value: string; sub: string; tone: "pos" | "neg" | "accent" | "warn" };
 
-/** Home KPI cards. Open-trade count is live; portfolio aggregates are
- *  representative for now (wire to demo_trades/portfolios next). */
+const ils = (n: number) => `₪ ${Math.round(n).toLocaleString("en-US")}`;
+
+/** Home KPI cards, wired to live Supabase data. Subscription has no DB
+ *  source yet, so it stays static. */
 export async function getKpis(): Promise<Kpi[]> {
-  const open = await sb<Record<string, unknown>>("demo_trades?select=trade_id&status=eq.open");
-  const openCount = open.length || 16;
+  const [bal, strat] = await Promise.all([
+    sb<Record<string, unknown>>("demo_balance?select=balance&order=id.desc&limit=1"),
+    sb<Record<string, unknown>>(
+      "iron_condor_strategies?select=expiry_date,result_status,actual_index_close," +
+        "actual_pnl_ils,is_valid&order=trigger_date.desc&limit=2000",
+    ),
+  ]);
+
+  const balance = num(bal[0]?.balance) ?? 100000;
+
+  const valid = strat.filter((x) => x.is_valid !== false);
+  const isSettled = (x: Record<string, unknown>) =>
+    !!x.result_status && (num(x.actual_index_close) ?? 0) > 0;
+  const settled = valid.filter(isSettled);
+  const active = valid.filter((x) => !isSettled(x));
+  const pnl = settled.reduce((s, x) => s + (num(x.actual_pnl_ils) ?? 0), 0);
+  const wins = settled.filter((x) => (num(x.actual_pnl_ils) ?? 0) > 0).length;
+  const winRate = settled.length ? Math.round((wins / settled.length) * 100) : 0;
+  const activeExpiries = new Set(active.map((x) => String(x.expiry_date))).size;
+
+  const pnlValue = `${pnl >= 0 ? "+" : "−"}${ils(Math.abs(pnl))}`;
   return [
-    { label: "סך שווי תיקים", value: "₪ 151,908", sub: "3 תיקים", tone: "warn" },
-    { label: "רווח/הפסד כולל", value: "₪ 1,908", sub: "1.27%+", tone: "pos" },
-    { label: "אופציות פתוחות", value: String(openCount), sub: "3 תיקים", tone: "accent" },
+    { label: "שווי תיק דמו", value: ils(balance), sub: "תיק דמו", tone: "warn" },
+    { label: "רווח/הפסד מסולק", value: pnlValue, sub: `${winRate}% הצלחה`, tone: pnl >= 0 ? "pos" : "neg" },
+    { label: "פוזיציות פתוחות", value: String(active.length), sub: `${activeExpiries} פקיעות`, tone: "accent" },
     { label: "מצב המנוי", value: "מנוי פעיל", sub: "269 ימים נותרים", tone: "pos" },
   ];
 }
