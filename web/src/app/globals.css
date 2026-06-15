@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ─────────────────────────────────────────────────────────────
-   TRADE BOOST — design tokens (dark, RTL trading dashboard).
+   GMM — design tokens (dark, RTL trading dashboard).
    Tailwind v4 CSS-first config: each token becomes a utility
    (--color-surface -> bg-surface / text-surface / border-surface).
    ───────────────────────────────────────────────────────────── */

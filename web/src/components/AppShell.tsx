@@ -9,7 +9,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <div className="pr-14">
         {/* brand bar */}
         <div className="flex items-center justify-end gap-2 px-6 py-4">
-          <span className="text-lg font-bold tracking-tight text-text1">TRADE BOOST</span>
+          <span className="text-lg font-bold tracking-tight text-text1">GMM</span>
           <span className="grid h-9 w-9 place-items-center rounded-xl bg-accent/15 text-accent text-xl ring-1 ring-accent/30">
             <Boost />
           </span>

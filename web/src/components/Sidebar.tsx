@@ -10,8 +10,8 @@ const NAV = [
   { icon: BarChart, href: "/demo" },
   { icon: File, href: "/strategies" },
   { icon: Calendar, href: "/calendar" },
-  { icon: Message, href: "#" },
-  { icon: Settings, href: "#" },
+  { icon: Message, href: "/alerts" },
+  { icon: Settings, href: "/settings" },
 ];
 
 export default function Sidebar() {

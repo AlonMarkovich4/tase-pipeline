@@ -381,3 +381,74 @@ export async function getExpiryCalendar(): Promise<ExpiryEntry[]> {
   for (const [d, e] of map) e.strategyTypes = [...(types.get(d) ?? [])];
   return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
+
+// ── Alerts & events ───────────────────────────────────────────────────
+export type SysEvent = { type: string; label: string; detail: string; tone: string; at: string };
+export type MarketEvent = { date: string; name: string; category: string; description: string };
+export type AlertsData = { freshness: Freshness; system: SysEvent[]; market: MarketEvent[] };
+
+const SYS_LABELS: Record<string, { label: string; tone: string }> = {
+  settlement_done: { label: "סילוק פקיעה בוצע", tone: "pos" },
+  daily_summary_sent: { label: "סיכום יומי נשלח", tone: "accent" },
+  weekly_heartbeat: { label: "פעימה שבועית", tone: "text3" },
+  strategy_triggered: { label: "אסטרטגיה שבועית הופעלה", tone: "accent" },
+};
+
+/** System activity (pipeline_state milestones) + freshness. Market events
+ *  intentionally left empty for now — to be wired to a future source. */
+export async function getAlertsData(): Promise<AlertsData> {
+  const [freshness, state] = await Promise.all([
+    getLastUpdate(),
+    sb<Record<string, unknown>>("pipeline_state?select=key,value,updated_at"),
+  ]);
+  const system: SysEvent[] = state
+    .map((r) => {
+      const key = String(r.key ?? "");
+      const [type, arg = ""] = key.split(":");
+      const m = SYS_LABELS[type];
+      return { type, label: m?.label ?? type, detail: arg, tone: m?.tone ?? "text3", at: String(r.updated_at ?? "") };
+    })
+    .sort((a, b) => b.at.localeCompare(a.at));
+  const market: MarketEvent[] = [];
+  return { freshness, system, market };
+}
+
+// ── Settings (live system configuration, read-only) ───────────────────
+export type SettingsData = {
+  intervals: number[];
+  wingWidth: number | null;
+  daysMin: number | null;
+  daysMax: number | null;
+  maxRisk: number | null;
+  demoBalance: number | null;
+  demoSince: string | null;
+  demoReason: string | null;
+  lastUpdate: Freshness;
+};
+
+/** Real parameters the pipeline runs with, derived from the data. */
+export async function getSettings(): Promise<SettingsData> {
+  const [rows, bal, lastUpdate] = await Promise.all([
+    sb<Record<string, unknown>>(
+      "iron_condor_strategies?select=interval_pct,wing_width,days_to_expiry,max_risk_ils&is_valid=eq.true",
+    ),
+    sb<Record<string, unknown>>("demo_balance?select=balance,change_reason,updated_at&order=updated_at.desc&limit=1"),
+    getLastUpdate(),
+  ]);
+  const vals = (f: string) => rows.map((r) => num(r[f])).filter((x): x is number => x != null);
+  const intervals = [...new Set(vals("interval_pct"))].sort((a, b) => a - b);
+  const widths = [...new Set(vals("wing_width"))];
+  const days = vals("days_to_expiry");
+  const risks = vals("max_risk_ils");
+  return {
+    intervals,
+    wingWidth: widths.length ? Math.max(...widths) : null,
+    daysMin: days.length ? Math.min(...days) : null,
+    daysMax: days.length ? Math.max(...days) : null,
+    maxRisk: risks.length ? Math.max(...risks) : null,
+    demoBalance: num(bal[0]?.balance),
+    demoSince: bal[0]?.updated_at ? String(bal[0].updated_at) : null,
+    demoReason: bal[0]?.change_reason ? String(bal[0].change_reason) : null,
+    lastUpdate,
+  };
+}

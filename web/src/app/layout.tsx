@@ -10,7 +10,7 @@ const heebo = Heebo({
 });
 
 export const metadata: Metadata = {
-  title: "TRADE BOOST — TLV35",
+  title: "GMM — TLV35",
   description: "TLV35 options trading dashboard",
 };
 
