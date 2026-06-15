@@ -29,13 +29,35 @@ export default function DemoWeeks({ weeks }: { weeks: Week[] }) {
       return n;
     });
 
+  const [stratFilter, setStratFilter] = useState("all");
+  const [weekFilter, setWeekFilter] = useState("all");
+
+  const allStrategies = [...new Set(weeks.flatMap((w) => w.trades.map((t) => t.strategyName)))];
+  const filtersActive = stratFilter !== "all" || weekFilter !== "all";
+  const filtered = weeks
+    .filter((w) => weekFilter === "all" || w.expiry === weekFilter)
+    .map((w) => ({
+      expiry: w.expiry,
+      trades: w.trades.filter((t) => stratFilter === "all" || t.strategyName === stratFilter),
+    }))
+    .filter((w) => w.trades.length > 0);
+
   return (
     <div className="space-y-4">
-      {weeks.map(({ expiry, trades }) => {
+      <div className={`${card} flex flex-col gap-3 p-4`}>
+        <FilterRow label="אסטרטגיה" value={stratFilter} onPick={setStratFilter}
+          options={[{ v: "all", l: "הכל" }, ...allStrategies.map((s) => ({ v: s, l: s }))]} />
+        <FilterRow label="שבוע" value={weekFilter} onPick={setWeekFilter}
+          options={[{ v: "all", l: "הכל" }, ...weeks.map((w) => ({ v: w.expiry, l: fmtDate(w.expiry) }))]} />
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className={`${card} p-10 text-center text-sm text-text3`}>אין פוזיציות התואמות לסינון</div>
+      ) : filtered.map(({ expiry, trades }) => {
         const closed = trades.filter((t) => t.status === "closed");
         const weekPnl = closed.reduce((a, t) => a + (t.pnlIls ?? 0), 0);
         const allOpen = closed.length === 0;
-        const isOpen = openSet.has(expiry);
+        const isOpen = filtersActive || openSet.has(expiry);
         return (
           <section key={expiry} className={`${card} overflow-hidden`}>
             <button
@@ -69,6 +91,26 @@ export default function DemoWeeks({ weeks }: { weeks: Week[] }) {
           </section>
         );
       })}
+    </div>
+  );
+}
+
+function FilterRow({ label, options, value, onPick }: {
+  label: string; options: { v: string; l: string }[]; value: string; onPick: (v: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="ml-1 text-xs text-text3">{label}:</span>
+      {options.map((o) => (
+        <button key={o.v} onClick={() => onPick(o.v)}
+          className={`rounded-lg border px-3 py-1.5 text-xs transition ${
+            value === o.v
+              ? "border-accent/40 bg-accent/15 text-accent"
+              : "border-border bg-surface2 text-text2 hover:text-text1"
+          }`}>
+          {o.l}
+        </button>
+      ))}
     </div>
   );
 }

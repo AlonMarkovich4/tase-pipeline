@@ -8,9 +8,9 @@ const NAV = [
   { icon: Home, href: "/" },
   { icon: Trending, href: "/simulator" },
   { icon: BarChart, href: "/demo" },
+  { icon: File, href: "/strategies" },
+  { icon: Calendar, href: "/calendar" },
   { icon: Message, href: "#" },
-  { icon: Calendar, href: "#" },
-  { icon: File, href: "#" },
   { icon: Settings, href: "#" },
 ];
 

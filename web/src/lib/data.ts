@@ -234,3 +234,150 @@ export async function getDemoBook(): Promise<DemoBook> {
     trades,
   };
 }
+
+// ── Strategy track record (pipeline's auto-generated iron condors) ─────
+export type Strategy = {
+  expiryDate: string;
+  baseIndex: number | null;
+  shortPut: number | null;
+  shortCall: number | null;
+  longPut: number | null;
+  longCall: number | null;
+  netPremium: number | null;
+  maxProfit: number | null;
+  maxRisk: number | null;
+  riskReward: number | null;
+  intervalPct: number | null;
+  resultStatus: string | null;
+  actualClose: number | null;
+  actualPnl: number | null;
+};
+export type StrategiesData = {
+  strategies: Strategy[];
+  settled: number;
+  wins: number;
+  losses: number;
+  totalPnl: number;
+  winRate: number;
+  outcomes: { maxProfit: number; partialLoss: number; maxLoss: number };
+  byExpiry: { expiry: string; pnl: number; count: number }[];
+};
+
+/** Valid iron-condor strategies with their settled outcomes + aggregates. */
+export async function getStrategiesData(): Promise<StrategiesData> {
+  const rows = await sb<Record<string, unknown>>(
+    "iron_condor_strategies?select=expiry_date,base_index_value,short_put_strike,short_call_strike," +
+      "long_put_strike,long_call_strike,total_net_premium,max_profit_ils,max_risk_ils,risk_reward_ratio," +
+      "interval_pct,result_status,actual_index_close,actual_pnl_ils&is_valid=eq.true&order=expiry_date.desc",
+  );
+  const strategies: Strategy[] = rows.map((r) => ({
+    expiryDate: String(r.expiry_date ?? ""),
+    baseIndex: num(r.base_index_value),
+    shortPut: num(r.short_put_strike),
+    shortCall: num(r.short_call_strike),
+    longPut: num(r.long_put_strike),
+    longCall: num(r.long_call_strike),
+    netPremium: num(r.total_net_premium),
+    maxProfit: num(r.max_profit_ils),
+    maxRisk: num(r.max_risk_ils),
+    riskReward: num(r.risk_reward_ratio),
+    intervalPct: num(r.interval_pct),
+    resultStatus: r.result_status ? String(r.result_status) : null,
+    actualClose: num(r.actual_index_close),
+    actualPnl: num(r.actual_pnl_ils),
+  }));
+
+  const settledList = strategies.filter((s) => s.actualPnl != null);
+  const wins = settledList.filter((s) => (s.actualPnl ?? 0) > 0).length;
+  const losses = settledList.filter((s) => (s.actualPnl ?? 0) < 0).length;
+  const totalPnl = settledList.reduce((a, s) => a + (s.actualPnl ?? 0), 0);
+  const outcomes = {
+    maxProfit: strategies.filter((s) => s.resultStatus === "max_profit").length,
+    partialLoss: strategies.filter((s) => s.resultStatus?.startsWith("partial")).length,
+    maxLoss: strategies.filter((s) => s.resultStatus?.startsWith("max_loss")).length,
+  };
+  const byExpiryMap = new Map<string, { pnl: number; count: number }>();
+  for (const s of settledList) {
+    const cur = byExpiryMap.get(s.expiryDate) ?? { pnl: 0, count: 0 };
+    cur.pnl += s.actualPnl ?? 0;
+    cur.count += 1;
+    byExpiryMap.set(s.expiryDate, cur);
+  }
+  const byExpiry = [...byExpiryMap.entries()]
+    .map(([expiry, v]) => ({ expiry, ...v }))
+    .sort((a, b) => a.expiry.localeCompare(b.expiry));
+
+  return {
+    strategies,
+    settled: settledList.length,
+    wins,
+    losses,
+    totalPnl,
+    winRate: settledList.length ? Math.round((wins / settledList.length) * 100) : 0,
+    outcomes,
+    byExpiry,
+  };
+}
+
+// ── Expiry calendar ───────────────────────────────────────────────────
+export type ExpiryEntry = {
+  date: string;
+  daysTo: number; // signed: <0 past, 0 today, >0 upcoming (Israel days)
+  strategies: number;
+  strategiesSettled: number;
+  demoOpen: number;
+  demoClosed: number;
+  pnl: number | null; // settled demo P&L for that expiry
+  live: boolean; // tradeable now (present in tase_putcall)
+  strategyTypes: string[]; // distinct strategy names present on this expiry
+};
+
+const ICONDOR = "איירון קונדור";
+
+/** Unified expiry calendar across the live chain, strategies, and demo book. */
+export async function getExpiryCalendar(): Promise<ExpiryEntry[]> {
+  const [live, strat, demo] = await Promise.all([
+    sb<Record<string, unknown>>("tase_putcall?select=expiry_date"),
+    sb<Record<string, unknown>>("iron_condor_strategies?select=expiry_date,result_status&is_valid=eq.true"),
+    sb<Record<string, unknown>>("demo_trades?select=expiry_date,status,pnl_ils,strategy_name"),
+  ]);
+  const nIL = nowIsrael();
+  nIL.setHours(0, 0, 0, 0);
+  const signedDays = (iso: string) =>
+    Math.round((new Date(`${iso}T00:00:00`).getTime() - nIL.getTime()) / 86400000);
+
+  const liveSet = new Set(live.map((x) => String(x.expiry_date ?? "")).filter(Boolean));
+  const map = new Map<string, ExpiryEntry>();
+  const types = new Map<string, Set<string>>();
+  const get = (d: string) => {
+    let e = map.get(d);
+    if (!e) {
+      e = { date: d, daysTo: signedDays(d), strategies: 0, strategiesSettled: 0, demoOpen: 0, demoClosed: 0, pnl: null, live: liveSet.has(d), strategyTypes: [] };
+      map.set(d, e);
+      types.set(d, new Set());
+    }
+    return e;
+  };
+  liveSet.forEach((d) => get(d));
+  for (const s of strat) {
+    const d = String(s.expiry_date ?? "");
+    if (!d) continue;
+    const e = get(d);
+    e.strategies++;
+    if (s.result_status) e.strategiesSettled++;
+    types.get(d)!.add(ICONDOR);
+  }
+  for (const t of demo) {
+    const d = String(t.expiry_date ?? "");
+    if (!d) continue;
+    const e = get(d);
+    if (String(t.status) === "closed") {
+      e.demoClosed++;
+      const p = num(t.pnl_ils);
+      if (p != null) e.pnl = (e.pnl ?? 0) + p;
+    } else e.demoOpen++;
+    if (t.strategy_name) types.get(d)!.add(String(t.strategy_name));
+  }
+  for (const [d, e] of map) e.strategyTypes = [...(types.get(d) ?? [])];
+  return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
