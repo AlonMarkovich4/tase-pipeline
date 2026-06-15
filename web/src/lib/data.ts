@@ -85,18 +85,22 @@ export async function getKpis(): Promise<Kpi[]> {
   ];
 }
 
-export type Quote = { sym: string; price: string; pct: number };
-export const TICKER: Quote[] = [
-  { sym: "WMT", price: "₪121.04", pct: 1.21 }, { sym: "WFC", price: "₪83.73", pct: 1.61 },
-  { sym: "VZ", price: "₪48.11", pct: 2.49 }, { sym: "VWO", price: "₪59.55", pct: 0.76 },
-  { sym: "VTI", price: "₪366.36", pct: 0.57 }, { sym: "VOO", price: "₪681.95", pct: 0.55 },
-  { sym: "VEA", price: "₪71.55", pct: 0.34 }, { sym: "V", price: "₪322.39", pct: 1.05 },
-  { sym: "USO", price: "₪125.43", pct: -2.64 }, { sym: "UNH", price: "₪408.52", pct: 0.73 },
-  { sym: "TSLA", price: "₪406.43", pct: 1.82 },
-];
+export type Freshness = { label: string; agoMin: number | null; tone: "pos" | "warn" | "neg" };
 
-export const WATCHLIST: Quote[] = [
-  { sym: "AAPL", price: "₪231.40", pct: 0.92 }, { sym: "MSFT", price: "₪447.10", pct: 1.34 },
-  { sym: "NVDA", price: "₪138.07", pct: -0.41 }, { sym: "GOOGL", price: "₪192.55", pct: 0.66 },
-  { sym: "AMZN", price: "₪224.80", pct: 1.12 }, { sym: "META", price: "₪612.33", pct: -0.28 },
-];
+/** Last pipeline update: newest fetch_date+fetch_time in tase_putcall (Israel time). */
+export async function getLastUpdate(): Promise<Freshness> {
+  const rows = await sb<Record<string, unknown>>(
+    "tase_putcall?select=fetch_date,fetch_time&order=id.desc&limit=1",
+  );
+  const fd = rows[0]?.fetch_date ? String(rows[0].fetch_date) : "";
+  const ft = rows[0]?.fetch_time ? String(rows[0].fetch_time) : "";
+  if (!fd || !ft) return { label: "—", agoMin: null, tone: "neg" };
+  // both parsed as server-local naive datetimes; the offset cancels in the diff,
+  // so the result is the true Israel wall-clock minutes-ago regardless of server TZ.
+  const last = new Date(`${fd}T${ft}`);
+  const nowIL = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+  const agoMin = Math.max(0, Math.round((nowIL.getTime() - last.getTime()) / 60000));
+  const [, m, d] = fd.split("-");
+  const tone: Freshness["tone"] = agoMin <= 30 ? "pos" : agoMin <= 120 ? "warn" : "neg";
+  return { label: `${d}/${m} ${ft}`, agoMin, tone };
+}

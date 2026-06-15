@@ -12,7 +12,7 @@ const NAV = [
 
 export default function Sidebar() {
   return (
-    <aside className="fixed right-0 top-9 bottom-0 z-20 flex w-14 flex-col items-center
+    <aside className="fixed right-0 top-0 bottom-0 z-20 flex w-14 flex-col items-center
                       border-l border-border bg-surface/60 py-4 backdrop-blur">
       <nav className="flex flex-1 flex-col items-center gap-1.5">
         {NAV.map(({ icon: Icon, active }, i) => (

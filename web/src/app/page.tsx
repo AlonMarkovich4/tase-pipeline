@@ -1,6 +1,6 @@
-import { getIndexData, getKpis, WATCHLIST, type Kpi } from "@/lib/data";
+import { getIndexData, getKpis, getLastUpdate, type Kpi } from "@/lib/data";
 import IndexChart from "@/components/IndexChart";
-import { Trending, ArrowLeft, Star, Refresh, Wallet, Target, Shield } from "@/components/icons";
+import { Trending, ArrowLeft, Wallet, Target, Shield } from "@/components/icons";
 
 const TONE: Record<Kpi["tone"], string> = {
   pos: "text-pos", neg: "text-neg", accent: "text-accent", warn: "text-warn",
@@ -10,11 +10,24 @@ const KPI_ICONS = [Wallet, Trending, Target, Shield];
 const card = "rounded-2xl border border-border bg-surface/70 backdrop-blur";
 
 export default async function Home() {
-  const [idx, kpis] = await Promise.all([getIndexData(), getKpis()]);
+  const [idx, kpis, fresh] = await Promise.all([getIndexData(), getKpis(), getLastUpdate()]);
   const up = idx.changePct >= 0;
+  const DOT = { pos: "bg-pos", warn: "bg-warn", neg: "bg-neg" } as const;
+  const ago =
+    fresh.agoMin == null ? "אין נתונים"
+      : fresh.agoMin < 60 ? `לפני ${fresh.agoMin} דק׳`
+      : `לפני ${Math.floor(fresh.agoMin / 60)}ש׳ ${fresh.agoMin % 60}ד׳`;
 
   return (
     <div className="space-y-5">
+      {/* last-updated freshness */}
+      <div className="flex justify-end">
+        <span className="inline-flex items-center gap-2 rounded-full border border-border bg-surface/70 px-3 py-1.5 text-xs text-text2">
+          <span className={`h-2 w-2 rounded-full ${DOT[fresh.tone]}`} />
+          עודכן לאחרונה: <span className="font-medium text-text1">{fresh.label}</span> · {ago}
+        </span>
+      </div>
+
       {/* KPI row */}
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {kpis.map((k, i) => {
@@ -59,32 +72,6 @@ export default async function Home() {
         <IndexChart series={idx.series} />
       </section>
 
-      {/* Watchlist */}
-      <section className={`${card} p-6`}>
-        <div className="mb-4 flex items-center justify-between">
-          <button className="flex items-center gap-2 rounded-xl border border-border bg-surface2 px-3 py-2 text-sm text-text2 hover:text-text1">
-            <Refresh /> רענן עכשיו
-          </button>
-          <div className="flex items-center justify-end gap-2">
-            <h2 className="text-xl font-bold text-text1">מניות במעקב</h2>
-            <span className="text-warn text-lg"><Star /></span>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {WATCHLIST.map((q) => {
-            const u = q.pct >= 0;
-            return (
-              <div key={q.sym} className="rounded-xl border border-border bg-surface2/60 p-3 text-right">
-                <div className="text-sm font-semibold text-text1">{q.sym}</div>
-                <div className="mt-1 text-sm tabular-nums text-text2">{q.price}</div>
-                <div className={`mt-0.5 text-xs tabular-nums ${u ? "text-pos" : "text-neg"}`}>
-                  {u ? "▲" : "▼"} {Math.abs(q.pct).toFixed(2)}%
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
     </div>
   );
 }
