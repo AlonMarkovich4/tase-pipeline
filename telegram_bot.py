@@ -163,46 +163,27 @@ def alert_weekly_heartbeat(date_str: str, rows: int, expiries: int,
 
 def alert_strategy_launch(base_index: float, strategies: list,
                           expiry_dates: list):
+    """Weekly condor launch confirmation — simplified.
+
+    Acknowledges that every variation was dispatched, with counts and the
+    expiry list. No per-interval strikes/premium table.
     """
-    Weekly strategy entry report.
-    Shows base index + compact table of intervals for the nearest expiry.
-    """
-    dates_str = _esc(", ".join(expiry_dates))
+    num_total    = len(strategies)
     num_expiries = len(expiry_dates)
-    num_total = len(strategies)
+    dates_fmt = " · ".join(
+        _esc(f"{str(d)[8:10]}/{str(d)[5:7]}" if len(str(d)) >= 10 else str(d))
+        for d in sorted(expiry_dates)
+    )
+    per = (num_total // num_expiries) if num_expiries else 0
+    breakdown = (f" ({per} מרווחים × {num_expiries} פקיעות)"
+                 if per and per * num_expiries == num_total else "")
 
     text = (
-        f"\U0001F680 <b>Iron Condor — כניסה שבועית</b>\n"
+        f"\U0001F680 <b>Iron Condor — שיגור שבועי</b>\n"
         f"━━━━━━━━━━━━━━━\n"
         f"\U0001F4CA TA-35: <code>{base_index:,.2f}</code>\n"
-        f"\U0001F4C5 {num_expiries} פקיעות: {dates_str}\n\n"
-    )
-
-    # Show intervals for the nearest expiry only (keep it compact)
-    if strategies:
-        nearest_exp = min(s["expiry_date"] for s in strategies)
-        nearest = [s for s in strategies
-                   if s["expiry_date"] == nearest_exp]
-        nearest.sort(key=lambda s: s["interval_pct"])
-
-        text += f"<b>פקיעה קרובה ({_esc(nearest_exp)}):</b>\n"
-        for s in nearest:
-            pct = s["interval_pct"]
-            sp = s["short_put_strike"]
-            sc = s["short_call_strike"]
-            prem = s["total_net_premium"]
-            profit = s["max_profit_ils"]
-            risk = s["max_risk_ils"]
-            text += (
-                f"<code>{pct:>4.1f}%</code>"
-                f" | <code>{sp:.0f}</code>—<code>{sc:.0f}</code>"
-                f" | פרמיה <code>{prem:,.1f}</code> נק׳"
-                f" | +<code>{profit:,.0f}</code>₪"
-                f" / -<code>{risk:,.0f}</code>₪\n"
-            )
-
-    text += (
-        f"\n✅ {num_total} וריאציות נשמרו"
+        f"\U0001F4C5 {num_expiries} פקיעות: {dates_fmt}\n"
+        f"✅ כל האסטרטגיות שוגרו — <b>{num_total}</b> וריאציות{breakdown}"
     )
     send_message(text)
 
@@ -213,34 +194,50 @@ def alert_strategy_launch(base_index: float, strategies: list,
 
 def alert_settlement(day_name: str, settlement_index: float,
                      base_index: float, results: list):
-    """Daily expiry settlement — shows P&L per interval."""
+    """Daily condor settlement — single line: the interval with the highest
+    actual ₪ among all of the expiry's intervals, with its ₪, risk/reward
+    ratio and max risk.
+
+    If EVERY interval lost money, the wording switches from "הכי רווחי" to
+    "התוצאה הטובה ביותר".
+
+    NOTE: ``risk_reward_ratio`` / ``max_risk_ils`` are shown only when present
+    in ``results``. settle_expiry does not SELECT them yet (Step 2), so they
+    are omitted until that one-line addition is made.
+    """
     def _n(v):
         try:
-            return float(v) if v is not None else 0
+            return float(v) if v is not None else 0.0
         except (ValueError, TypeError):
-            return 0
+            return 0.0
 
     text = (
-        f"\U0001F3C1 <b>פקיעה — יום {_esc(day_name)}</b>\n"
+        f"\U0001F3C1 <b>פקיעת Iron Condor — יום {_esc(day_name)}</b>\n"
         f"━━━━━━━━━━━━━━━\n"
         f"\U0001F4CA סגירה: <code>{settlement_index:,.2f}</code>"
-        f" | כניסה: <code>{base_index:,.2f}</code>\n\n"
+        f" | כניסה: <code>{base_index:,.2f}</code>"
     )
 
-    for r in sorted(results, key=lambda x: _n(x.get("interval_pct", 0))):
-        pct = _n(r.get("interval_pct", 0))
-        pnl = _n(r.get("actual_pnl_ils", 0))
-        status = r.get("result_status", "")
+    if results:
+        best = max(results, key=lambda r: _n(r.get("actual_pnl_ils")))
+        pct = _n(best.get("interval_pct"))
+        pnl = _n(best.get("actual_pnl_ils"))
+        all_negative = all(_n(r.get("actual_pnl_ils")) < 0 for r in results)
+        label = "התוצאה הטובה ביותר" if all_negative else "הכי רווחי"
+        icon  = "\U0001F4B0" if pnl >= 0 else "\U0001F53B"   # 💰 / 🔻
 
-        icon = {
-            "max_profit":        "✅",
-            "partial_loss_put":  "⚠️",
-            "partial_loss_call": "⚠️",
-            "max_loss_put":      "❌",
-            "max_loss_call":     "❌",
-        }.get(status, "❓")
+        extra = ""
+        rr = best.get("risk_reward_ratio")
+        if rr is not None:
+            extra += f" · RR <code>{_n(rr):.2f}</code>"
+        mr = best.get("max_risk_ils")
+        if mr is not None:
+            extra += f" · מקס׳ סיכון <code>{_n(mr):,.0f} ₪</code>"
 
-        text += f"{icon} <code>{pct:.1f}%</code> | <code>{pnl:+,.0f} ₪</code>\n"
+        text += (
+            f"\n\n{icon} {label}: מרווח <code>{pct:.1f}%</code>"
+            f" · <code>{pnl:+,.0f} ₪</code>{extra}"
+        )
 
     send_message(text)
 
@@ -273,44 +270,45 @@ def alert_daily_summary(date_str: str, cycles: int,
 # 5. WEEKLY SUMMARY (last trading day)
 # ------------------------------------------------------------------
 
-def alert_weekly_summary(week_stats: dict):
-    """Last-trading-day end-of-week summary.
+_DAY_HE = {
+    "Sunday": "א׳", "Monday": "ב׳", "Tuesday": "ג׳", "Wednesday": "ד׳",
+    "Thursday": "ה׳", "Friday": "ו׳", "Saturday": "ש׳",
+}
 
-    Lists EVERY interval traded that week and its ₪ P&L, plus the weekly
-    total, win-rate, and the best/worst interval.
+
+def alert_weekly_summary(week_stats: dict):
+    """End-of-week condor summary — POTENTIAL profit.
+
+    Potential = the sum of the best-₪ interval per expiry that settled this
+    week (not the sum of every interval). Framed as potential, not realized.
     """
-    trades = week_stats.get("trades", 0)
-    wins = week_stats.get("wins", 0)
-    losses = trades - wins
-    wr = (wins / trades * 100) if trades > 0 else 0
-    total_pnl = week_stats.get("total_pnl", 0)
-    best_interval = week_stats.get("best_interval", 0)
-    worst_interval = week_stats.get("worst_interval", 0)
-    by_interval = week_stats.get("by_interval", {}) or {}
+    breakdown = week_stats.get("potential_breakdown", []) or []
+    # Sum the rounded per-expiry values so the total equals the shown lines
+    # (avoids a round-then-sum vs sum-then-round 1₪ discrepancy).
+    total = sum(round(float(b.get("pnl", 0))) for b in breakdown)
+    n = len(breakdown)
 
     def _fmt_ils(v: float) -> str:
-        return f"+{v:,.0f}" if v > 0 else f"{v:,.0f}"
+        return f"+{v:,.0f}" if v >= 0 else f"{v:,.0f}"
 
-    # Per-interval breakdown — one line per interval, ✅/❌ by sign.
     lines = []
-    for pct, pnl in by_interval.items():
-        icon = "✅" if pnl > 0 else ("➖" if pnl == 0 else "❌")
-        lines.append(f"{icon} {float(pct):.1f}% | <code>{_fmt_ils(pnl)} ₪</code>")
-    breakdown = "\n".join(lines) if lines else "—"
-
-    total_icon = "\U0001F4C8" if total_pnl >= 0 else "\U0001F4C9"
+    for b in breakdown:
+        e = str(b.get("expiry", ""))
+        d = _DAY_HE.get(b.get("day", ""), "")
+        dm = f"{e[8:10]}/{e[5:7]}" if len(e) >= 10 else _esc(e)
+        lines.append(
+            f"   • {d} <code>{dm}</code> — מרווח <code>{float(b.get('interval', 0)):.1f}%</code>"
+            f" → <code>{_fmt_ils(b.get('pnl', 0))} ₪</code>"
+        )
+    body = "\n".join(lines) if lines else "—"
+    total_icon = "\U0001F4C8" if total >= 0 else "\U0001F4C9"
 
     text = (
         f"\U0001F4CA <b>סיכום שבועי — TA-35</b>\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"\U0001F3AF הצלחה: <code>{wr:.0f}%</code>"
-        f" ({wins}W/{losses}L מתוך {trades})\n"
-        f"{total_icon} סה\"כ השבוע: <code>{_fmt_ils(total_pnl)} ₪</code>\n\n"
-        f"<b>לפי מרווח:</b>\n"
-        f"{breakdown}\n\n"
-        f"\U0001F3C6 מוביל: {float(best_interval):.1f}% "
-        f"(<code>{_fmt_ils(week_stats.get('best_pnl', 0))} ₪</code>)\n"
-        f"\U0001F480 חלש: {float(worst_interval):.1f}% "
-        f"(<code>{_fmt_ils(week_stats.get('worst_pnl', 0))} ₪</code>)"
+        f"\U0001F3C1 {n} פקיעות נסלקו השבוע\n\n"
+        f"\U0001F4A1 רווח פוטנציאלי כולל: {total_icon} <code>{_fmt_ils(total)} ₪</code>\n"
+        f"{body}\n\n"
+        f"<i>פוטנציאלי — אילו פעלנו לפי המרווח הטוב בכל פקיעה; לא רווח ממומש.</i>"
     )
     send_message(text)

@@ -1065,7 +1065,8 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
         f"?result_status=not.is.null"
         f"&trigger_date=gte.{week_start.isoformat()}"
         f"&trigger_date=lte.{week_end.isoformat()}"
-        f"&select=trigger_date,interval_pct,actual_pnl_ils,result_status"
+        f"&select=trigger_date,expiry_date,expiry_day_name,interval_pct,"
+        f"actual_pnl_ils,result_status"
         f"&order=trigger_date"
     )
     try:
@@ -1080,6 +1081,28 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
 
     if not week_rows:
         return {}
+
+    # Potential profit (condor): the best-₪ interval PER EXPIRY, summed.
+    # Computed on ALL intervals, before any preferred-interval filtering.
+    by_expiry: dict = {}
+    for r in week_rows:
+        exp = str(r.get("expiry_date", ""))
+        if not exp:
+            continue
+        pnl = _clean_numeric(r.get("actual_pnl_ils", 0))
+        cur = by_expiry.get(exp)
+        if cur is None or pnl > cur["pnl"]:
+            by_expiry[exp] = {
+                "pnl":      pnl,
+                "interval": _clean_numeric(r.get("interval_pct", 0)),
+                "day":      r.get("expiry_day_name", ""),
+            }
+    potential_total = sum(b["pnl"] for b in by_expiry.values())
+    potential_breakdown = [
+        {"expiry": e, "day": by_expiry[e]["day"],
+         "interval": by_expiry[e]["interval"], "pnl": by_expiry[e]["pnl"]}
+        for e in sorted(by_expiry)
+    ]
 
     preferred = _get_preferred_intervals()
     if preferred:
@@ -1111,7 +1134,9 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
         "best_pnl":       by_interval.get(best_interval, 0),
         "worst_interval": worst_interval,
         "worst_pnl":      by_interval.get(worst_interval, 0),
-        # Per-interval P&L for the week (₪), sorted by interval ascending —
-        # consumed by the weekly Telegram summary to list every interval.
+        # Per-interval P&L for the week (₪), sorted by interval ascending.
         "by_interval":    dict(sorted(by_interval.items())),
+        # Potential: best-₪ interval per expiry + the weekly sum of those.
+        "potential_total":     potential_total,
+        "potential_breakdown": potential_breakdown,
     }
