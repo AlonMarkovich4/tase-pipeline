@@ -1082,27 +1082,33 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
     if not week_rows:
         return {}
 
-    # Potential profit (condor): the best-₪ interval PER EXPIRY, summed.
-    # Computed on ALL intervals, before any preferred-interval filtering.
-    by_expiry: dict = {}
-    for r in week_rows:
-        exp = str(r.get("expiry_date", ""))
-        if not exp:
-            continue
-        pnl = _clean_numeric(r.get("actual_pnl_ils", 0))
-        cur = by_expiry.get(exp)
-        if cur is None or pnl > cur["pnl"]:
-            by_expiry[exp] = {
-                "pnl":      pnl,
-                "interval": _clean_numeric(r.get("interval_pct", 0)),
-                "day":      r.get("expiry_day_name", ""),
-            }
-    potential_total = sum(b["pnl"] for b in by_expiry.values())
-    potential_breakdown = [
-        {"expiry": e, "day": by_expiry[e]["day"],
-         "interval": by_expiry[e]["interval"], "pnl": by_expiry[e]["pnl"]}
-        for e in sorted(by_expiry)
-    ]
+    # Potential profit (condor): read the best_condor_per_expiry VIEW — the
+    # single source of truth shared with the dashboard — for this week's
+    # expiries (each settles on its own date). Same View → same number in the
+    # bot and the dashboard.
+    potential_total = 0.0
+    potential_breakdown = []
+    try:
+        view_url = _sc.rest_url(
+            f"best_condor_per_expiry"
+            f"?expiry_date=gte.{week_start.isoformat()}"
+            f"&expiry_date=lte.{week_end.isoformat()}"
+            f"&select=expiry_date,expiry_day_name,interval_pct,actual_pnl_ils"
+            f"&order=expiry_date"
+        )
+        vr = httpx.get(view_url, headers=_sc.headers(), timeout=15)
+        if vr.status_code in (200, 206):
+            for row in vr.json():
+                pnl = _clean_numeric(row.get("actual_pnl_ils", 0))
+                potential_total += pnl
+                potential_breakdown.append({
+                    "expiry":   str(row.get("expiry_date", "")),
+                    "day":      row.get("expiry_day_name", ""),
+                    "interval": _clean_numeric(row.get("interval_pct", 0)),
+                    "pnl":      pnl,
+                })
+    except Exception as e:
+        logger.error("get_weekly_stats potential (View) error: %s", e)
 
     preferred = _get_preferred_intervals()
     if preferred:
