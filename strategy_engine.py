@@ -535,12 +535,12 @@ def _calculate_condor(base_index: float, interval_pct: float,
             float(lp_strike), float(lp_price))
         total_net_premium = actual_wing_max
         premium_flag = "price_capped"
-    elif raw_net_premium < ZERO:
+    elif raw_net_premium <= ZERO:
         total_net_premium = raw_net_premium
-        premium_flag = "negative_premium"
+        premium_flag = "non_positive_premium"
         logger.info(
-            "   %.1f%% %s: negative premium %.4f — "
-            "this interval costs money to enter (not tradeable)",
+            "   %.1f%% %s: non-positive premium %.4f — "
+            "no net credit, not a tradeable condor",
             interval_pct, expiry_date, float(raw_net_premium))
     else:
         total_net_premium = raw_net_premium
@@ -642,6 +642,12 @@ def _calculate_condor(base_index: float, interval_pct: float,
         "actual_wing_put":    _q2(actual_wing_put),
         "actual_wing_call":   _q2(actual_wing_call),
         "premium_flag":       premium_flag,
+        # Pipeline-managed validity: a tradeable iron condor always carries a
+        # positive net credit. premium <= 0 (no prices / degenerate) => invalid,
+        # so all consumers (View, dashboard, bot) auto-exclude it.
+        "is_valid":           total_net_premium > ZERO,
+        "invalid_reason":     "" if total_net_premium > ZERO
+                              else (premium_flag or "non_positive_premium"),
     }
 
 

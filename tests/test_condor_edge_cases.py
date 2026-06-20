@@ -24,6 +24,10 @@ def test_zero_premium_rr_guard():
     r = _calc(2000.0, 1.0, rows)
     assert r["risk_reward_ratio"] == 0.0
     assert r["max_profit_ils"] <= 0.0
+    # Root fix: non-positive premium => flagged + auto-marked invalid
+    assert r["premium_flag"] == "non_positive_premium"
+    assert r["is_valid"] is False
+    assert r["invalid_reason"] == "non_positive_premium"
 
 
 # ── price_capped: premium impossibly larger than wing ─────────────────────
@@ -39,6 +43,7 @@ def test_premium_capped_to_wing():
     # premium capped to wing (20); flag set
     assert r["premium_flag"] == "price_capped"
     assert abs(r["total_net_premium"] - 20.0) < TOL
+    assert r["is_valid"] is True   # positive premium => valid
 
 
 # ── No-debit guarantee (FIXED — was H-1) ──────────────────────────────────
