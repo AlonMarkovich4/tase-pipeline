@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { DemoTrade } from "@/lib/data";
 import { ChevronDown } from "@/components/icons";
+import { STRATEGY_NAMES } from "@/lib/strategies";
 
 const card = "rounded-2xl border border-border bg-surface/70 backdrop-blur";
 const ils = (n: number | null) =>
@@ -32,7 +33,8 @@ export default function DemoWeeks({ weeks }: { weeks: Week[] }) {
   const [stratFilter, setStratFilter] = useState("all");
   const [weekFilter, setWeekFilter] = useState("all");
 
-  const allStrategies = [...new Set(weeks.flatMap((w) => w.trades.map((t) => t.strategyName)))];
+  // all canonical strategies + any extra actually present in the demo trades
+  const allStrategies = [...new Set([...STRATEGY_NAMES, ...weeks.flatMap((w) => w.trades.map((t) => t.strategyName))])];
   const filtersActive = stratFilter !== "all" || weekFilter !== "all";
   const filtered = weeks
     .filter((w) => weekFilter === "all" || w.expiry === weekFilter)

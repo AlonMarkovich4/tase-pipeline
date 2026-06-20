@@ -1,8 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, BarChart, Message, Calendar, Trending, File, Settings, Sun, Logout } from "./icons";
+import { Home, BarChart, Message, Calendar, Trending, File, Settings, Sun, Moon, Logout } from "./icons";
 
 const NAV = [
   { icon: Home, href: "/" },
@@ -16,6 +17,14 @@ const NAV = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const [light, setLight] = useState(false);
+  useEffect(() => setLight(document.documentElement.classList.contains("light")), []);
+  const toggleTheme = () => {
+    const next = !light;
+    setLight(next);
+    document.documentElement.classList.toggle("light", next);
+    try { localStorage.setItem("theme", next ? "light" : "dark"); } catch {}
+  };
   return (
     <aside className="fixed right-0 top-0 bottom-0 z-20 flex w-14 flex-col items-center
                       border-l border-border bg-surface/60 py-4 backdrop-blur">
@@ -37,8 +46,9 @@ export default function Sidebar() {
         })}
       </nav>
       <div className="flex flex-col items-center gap-1.5">
-        <button className="grid h-10 w-10 place-items-center rounded-xl text-xl text-text3 hover:bg-surface2 hover:text-text1">
-          <Sun />
+        <button onClick={toggleTheme} aria-label="החלף מצב תצוגה"
+          className="grid h-10 w-10 place-items-center rounded-xl text-xl text-text3 hover:bg-surface2 hover:text-text1">
+          {light ? <Moon /> : <Sun />}
         </button>
         <button className="grid h-10 w-10 place-items-center rounded-xl text-xl text-text3 hover:bg-surface2 hover:text-text1">
           <Logout />

@@ -70,6 +70,35 @@ const FALLBACK_SERIES: IndexPoint[] = [
   ["2026-06-15", 4292.94],
 ].map(([date, value]) => ({ date: date as string, value: value as number }));
 
+/** Current VTA35 volatility ("fear") index — Yahoo 598.TA, fetched server-side.
+ *  Display-only. Fail-safe like `sb()`: returns null on failure (never throws).
+ *  A 2-min in-process cache avoids hammering Yahoo on every page load and, on a
+ *  transient Yahoo failure, serves the last good value so the readout doesn't flicker. */
+let _vtaCache: { val: number | null; ts: number } = { val: null, ts: 0 };
+const VTA_TTL_MS = 120_000;
+
+export async function getVta35(): Promise<number | null> {
+  const now = Date.now();
+  if (_vtaCache.val != null && now - _vtaCache.ts < VTA_TTL_MS) return _vtaCache.val;
+  try {
+    const r = await fetch(
+      "https://query1.finance.yahoo.com/v8/finance/chart/598.TA?interval=1d&range=1d",
+      { headers: { "User-Agent": "Mozilla/5.0" }, cache: "no-store" },
+    );
+    if (r.ok) {
+      const data = await r.json();
+      const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+      if (typeof price === "number" && price > 0) {
+        _vtaCache = { val: price, ts: now };
+        return price;
+      }
+    }
+  } catch {
+    // fall through to last-good value
+  }
+  return _vtaCache.val; // last good value (or null if never fetched)
+}
+
 export type Kpi = { label: string; value: string; sub: string; tone: "pos" | "neg" | "accent" | "warn" };
 
 const ils = (n: number) => `₪ ${Math.round(n).toLocaleString("en-US")}`;

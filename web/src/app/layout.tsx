@@ -20,6 +20,11 @@ export default function RootLayout({
   return (
     <html lang="he" dir="rtl" className={`${heebo.variable} h-full`}>
       <body className="min-h-full">
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{if(localStorage.getItem('theme')==='light')document.documentElement.classList.add('light')}catch(e){}`,
+          }}
+        />
         <AppShell>{children}</AppShell>
       </body>
     </html>

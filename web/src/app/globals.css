@@ -23,6 +23,9 @@
   --color-warn:      #fbbf24;
   --color-purple:    #a78bfa;
 
+  --color-grid:        rgba(255, 255, 255, 0.06);
+  --color-grid-strong: rgba(255, 255, 255, 0.22);
+
   --radius-card: 16px;
 
   --font-sans: var(--font-heebo), ui-sans-serif, system-ui, sans-serif;
@@ -51,6 +54,36 @@ body::before {
 * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.12) transparent; }
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 8px; }
+
+html { color-scheme: dark; }
+
+/* ── Light theme (html.light overrides the dark token defaults) ── */
+html.light {
+  --color-bg:        #f1f4f9;
+  --color-surface:   #ffffff;
+  --color-surface2:  #eaeef5;
+  --color-border:    rgba(15, 23, 42, 0.10);
+  --color-border2:   rgba(15, 23, 42, 0.16);
+  --color-text1:     #0f172a;
+  --color-text2:     #475569;
+  --color-text3:     #7c8aa0;
+  --color-accent:    #0891b2;
+  --color-accent2:   #0284c7;
+  --color-pos:       #059669;
+  --color-neg:       #dc2626;
+  --color-warn:      #b45309;
+  --color-purple:    #7c3aed;
+  --color-grid:        rgba(15, 23, 42, 0.08);
+  --color-grid-strong: rgba(15, 23, 42, 0.20);
+  color-scheme: light;
+}
+html.light body::before {
+  background:
+    radial-gradient(900px 500px at 85% -10%, rgba(8, 145, 178, 0.06), transparent 60%),
+    radial-gradient(700px 500px at 0% 110%, rgba(2, 132, 199, 0.05), transparent 60%);
+}
+html.light * { scrollbar-color: rgba(15,23,42,.20) transparent; }
+html.light *::-webkit-scrollbar-thumb { background: rgba(15,23,42,.20); }
 
 @keyframes ticker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 .animate-ticker { animation: ticker 38s linear infinite; }

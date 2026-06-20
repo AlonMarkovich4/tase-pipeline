@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ExpiryChain, ChainRow } from "@/lib/data";
-import { Trending, Refresh } from "@/components/icons";
+import { Trending, Refresh, BarChart } from "@/components/icons";
 import { dispatchToDemo } from "@/app/simulator/actions";
 
 const MULT = 50; // ₪ per index point per contract
@@ -72,7 +72,7 @@ function payoffAt(legs: Leg[], s: number): number {
   return total;
 }
 
-export default function Simulator({ chains }: { chains: ExpiryChain[] }) {
+export default function Simulator({ chains, vta }: { chains: ExpiryChain[]; vta: number | null }) {
   const [expIdx, setExpIdx] = useState(0);
   const [legMap, setLegMap] = useState<Record<string, Leg>>({});
   const [strat, setStrat] = useState<string | null>(null);
@@ -186,31 +186,37 @@ export default function Simulator({ chains }: { chains: ExpiryChain[] }) {
     <div className="space-y-5">
       {/* ── header: expiry tabs + spot ── */}
       <section className={`${card} flex flex-wrap items-center justify-between gap-4 p-5`}>
-        <div className="flex flex-wrap items-center gap-2">
-          {chains.map((c, i) => (
-            <button
-              key={c.date}
-              onClick={() => setExpIdx(i)}
-              className={`rounded-xl border px-3 py-2 text-sm transition ${
-                i === expIdx
-                  ? "border-accent/40 bg-accent/15 text-accent"
-                  : "border-border bg-surface2 text-text2 hover:text-text1"
-              }`}
-            >
-              <span className="font-medium tabular-nums">{c.date.slice(8)}/{c.date.slice(5, 7)}</span>
-              <span className="mx-1 text-text3">·</span>
-              <span className="text-xs">{c.dayName}</span>
-              <span className="mx-1 text-text3">·</span>
-              <span className="text-xs tabular-nums">{c.days} ימים</span>
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-text3">פקיעה</span>
+          <select
+            value={expIdx}
+            onChange={(e) => setExpIdx(Number(e.target.value))}
+            className="rounded-xl border border-border bg-surface2 px-3 py-2 text-sm text-text1 outline-none transition focus:border-accent/40"
+          >
+            {chains.map((c, i) => (
+              <option key={c.date} value={i}>
+                {c.date.slice(8)}/{c.date.slice(5, 7)} · {c.dayName} · {c.days} ימים
+              </option>
+            ))}
+          </select>
         </div>
-        <div className="text-right">
-          <div className="flex items-center justify-end gap-2 text-text2">
-            <span className="text-sm">מדד TLV35</span>
-            <span className="text-accent"><Trending /></span>
+        <div className="flex items-center gap-5">
+          {vta != null && (
+            <div className="text-right">
+              <div className="flex items-center justify-end gap-2 text-text2">
+                <span className="text-sm">VTA35</span>
+                <span className="text-warn"><BarChart /></span>
+              </div>
+              <div className="text-2xl font-bold tabular-nums text-warn">{fmt(vta)}</div>
+            </div>
+          )}
+          <div className="text-right">
+            <div className="flex items-center justify-end gap-2 text-text2">
+              <span className="text-sm">מדד TLV35</span>
+              <span className="text-accent"><Trending /></span>
+            </div>
+            <div className="text-2xl font-bold tabular-nums text-text1">{fmt(spot)}</div>
           </div>
-          <div className="text-2xl font-bold tabular-nums text-text1">{fmt(spot)}</div>
         </div>
       </section>
 
@@ -257,7 +263,7 @@ export default function Simulator({ chains }: { chains: ExpiryChain[] }) {
         {/* percentage spread controls — only the ones this strategy uses */}
         {(showOff || showWing) && (
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            {showOff && <PctRow label="מרחק קצר" values={OFFSETS} value={off} onPick={setOff} />}
+            {showOff && <SelectRow label="מרחק קצר" values={OFFSETS} value={off} onPick={setOff} />}
             {showWing && <PctRow label="רוחב כנף" values={WINGS} value={wing} onPick={setWing} />}
           </div>
         )}
@@ -412,6 +418,25 @@ function PctRow({
   );
 }
 
+function SelectRow({
+  label, values, value, onPick,
+}: { label: string; values: number[]; value: number; onPick: (v: number) => void }) {
+  return (
+    <div>
+      <div className="mb-1.5 text-right text-xs text-text2">{label}</div>
+      <select
+        value={value}
+        onChange={(e) => onPick(Number(e.target.value))}
+        className="w-full rounded-lg border border-border bg-surface2 px-3 py-2 text-sm tabular-nums text-text1 outline-none transition focus:border-accent/40"
+      >
+        {values.map((v) => (
+          <option key={v} value={v}>{v}%</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 function Metric({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone: string }) {
   const TONE: Record<string, string> = { pos: "text-pos", neg: "text-neg", accent: "text-accent", warn: "text-warn" };
   return (
@@ -486,11 +511,11 @@ function PayoffChart({
       )}
 
       {/* zero baseline */}
-      <line x1={padX} x2={W - padX} y1={y0} y2={y0} stroke="rgba(255,255,255,.25)" strokeDasharray="4 4" />
+      <line x1={padX} x2={W - padX} y1={y0} y2={y0} stroke="var(--color-grid-strong)" strokeDasharray="4 4" />
 
       {/* strike gridlines */}
       {strikes.map((k, i) => (
-        <line key={i} x1={x(k)} x2={x(k)} y1={padTop} y2={H - padBot} stroke="rgba(255,255,255,.07)" />
+        <line key={i} x1={x(k)} x2={x(k)} y1={padTop} y2={H - padBot} stroke="var(--color-grid)" />
       ))}
 
       {/* P&L line (green above 0, red below) */}

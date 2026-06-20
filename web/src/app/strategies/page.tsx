@@ -106,7 +106,7 @@ function ExpiryPnlChart({ data }: { data: { expiry: string; pnl: number; count: 
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="h-56 w-full">
-      <line x1={padX} x2={W - padX} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,.18)" />
+      <line x1={padX} x2={W - padX} y1={zeroY} y2={zeroY} stroke="var(--color-grid-strong)" />
       {data.map((d, i) => {
         const pos = d.pnl >= 0;
         return (
