@@ -319,6 +319,38 @@ export async function getStrategiesData(): Promise<StrategiesData> {
   };
 }
 
+// ── Best condor per expiry (reads the best_condor_per_expiry View) ─────
+export type BestCondor = {
+  expiryDate: string;
+  dayName: string;
+  interval: number;
+  pnl: number;        // ₪ potential — "how much we could have profited"
+  rr: number | null;  // risk/reward ratio
+  maxRisk: number | null;
+  baseIndex: number | null;
+  close: number | null;
+};
+
+/** The best-₪ condor per expiry — single source of truth shared with the bot.
+ *  Reads the `best_condor_per_expiry` Supabase View directly. */
+export async function getBestCondorPerExpiry(): Promise<BestCondor[]> {
+  const rows = await sb<Record<string, unknown>>(
+    "best_condor_per_expiry?select=expiry_date,expiry_day_name,interval_pct," +
+      "actual_pnl_ils,risk_reward_ratio,max_risk_ils,base_index_value,actual_index_close" +
+      "&order=expiry_date.desc",
+  );
+  return rows.map((r) => ({
+    expiryDate: String(r.expiry_date ?? ""),
+    dayName: String(r.expiry_day_name ?? ""),
+    interval: num(r.interval_pct) ?? 0,
+    pnl: num(r.actual_pnl_ils) ?? 0,
+    rr: num(r.risk_reward_ratio),
+    maxRisk: num(r.max_risk_ils),
+    baseIndex: num(r.base_index_value),
+    close: num(r.actual_index_close),
+  }));
+}
+
 // ── Expiry calendar ───────────────────────────────────────────────────
 export type ExpiryEntry = {
   date: string;

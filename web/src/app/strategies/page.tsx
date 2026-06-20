@@ -1,6 +1,7 @@
-import { getStrategiesData } from "@/lib/data";
+import { getStrategiesData, getBestCondorPerExpiry } from "@/lib/data";
 import { File, Target, Trending, Shield } from "@/components/icons";
 import StrategiesTable from "@/components/StrategiesTable";
+import BestCondorPager from "@/components/BestCondorPager";
 
 const card = "rounded-2xl border border-border bg-surface/70 backdrop-blur";
 const ils = (n: number | null) =>
@@ -8,7 +9,7 @@ const ils = (n: number | null) =>
 const fmtDM = (iso: string) => (iso ? `${iso.slice(8)}/${iso.slice(5, 7)}` : "—");
 
 export default async function StrategiesPage() {
-  const d = await getStrategiesData();
+  const [d, best] = await Promise.all([getStrategiesData(), getBestCondorPerExpiry()]);
   const rrs = d.strategies.map((s) => s.riskReward).filter((x): x is number => x != null && x > 0);
   const avgRR = rrs.length ? rrs.reduce((a, b) => a + b, 0) / rrs.length : null;
 
@@ -24,6 +25,9 @@ export default async function StrategiesPage() {
         <Kpi icon={<Shield />} label="יחס סיכון/סיכוי ממוצע" value={avgRR == null ? "—" : avgRR.toFixed(2)}
           tone="text-text1" />
       </section>
+
+      {/* best condor per expiry (from the best_condor_per_expiry View) */}
+      <BestCondorPager items={best} />
 
       {/* outcome distribution */}
       <section className={`${card} p-5`}>
