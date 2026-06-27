@@ -4,6 +4,7 @@ database.py -- Supabase helper for TASE pipeline (Render deployment).
 Flat structure: each option record is its own row in the table.
 Clears all rows before each fresh write (keep only latest snapshot).
 """
+from __future__ import annotations
 
 import csv
 import io
@@ -382,6 +383,22 @@ def state_is_set(key: str) -> bool:
     except Exception as e:
         logger.warning("state_is_set(%s) error: %s", key, e)
     return False
+
+
+def state_get(key: str) -> str | None:
+    """Return the stored value for a marker, or None if absent / on error.
+    Read-only companion to state_is_set (which only checks existence)."""
+    _ensure_init()
+    try:
+        url = _sc.rest_url(f"pipeline_state?key=eq.{key}&select=value&limit=1")
+        r = httpx.get(url, headers=_sc.headers(), timeout=10)
+        if r.status_code in (200, 206):
+            rows = r.json()
+            if rows:
+                return rows[0].get("value")
+    except Exception as e:
+        logger.warning("state_get(%s) error: %s", key, e)
+    return None
 
 
 def state_set(key: str, value: str = "1") -> bool:

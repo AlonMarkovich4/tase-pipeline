@@ -6,6 +6,7 @@ hours (Mon-Fri 09:30-17:30) and syncs to Supabase.
 
 Uses Playwright + page.evaluate(fetch()) to bypass Imperva WAF.
 """
+from __future__ import annotations
 
 import logging
 import os
@@ -213,6 +214,83 @@ def _archive_eod_snapshot(today_iso: str) -> None:
 
 
 # ------------------------------------------------------------------
+# Weekly summary — durable, restart-safe scheduling (Bug 1 fix)
+# ------------------------------------------------------------------
+# The post-close weekly summary used to rely on an in-memory `due_at` set at
+# the last Friday cycle (~17:16) to fire in the off-hours block (~18:30). A
+# restart in that window dropped it, so the summary was never sent. We now
+# persist the schedule in pipeline_state — mirroring `_archive_eod_snapshot`:
+#   • weekly_summary:scheduled:<year>-W<ww>  (value = due-at ISO)  → set at schedule
+#   • weekly_summary_sent:<year>-W<ww>                              → set after send
+# The off-hours catch-up fires from these durable markers, so it survives a
+# restart and is idempotent (never sends twice).
+
+def _weekly_summary_keys(now: datetime, week: int) -> tuple:
+    """(scheduled_key, sent_key) for the given week."""
+    year = now.isocalendar()[0]
+    return (f"weekly_summary:scheduled:{year}-W{week:02d}",
+            f"weekly_summary_sent:{year}-W{week:02d}")
+
+
+def _parse_due_at(raw: str | None):
+    """Parse a stored due-at ISO timestamp; None on missing/unparseable."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return None
+
+
+def _schedule_weekly_summary(now: datetime, week: int):
+    """Persist a durable 'scheduled' marker (value = firing time = close+1h) so
+    the weekly summary survives a restart. Idempotent: if already scheduled,
+    returns the existing due-at without rewriting. Returns the due-at datetime."""
+    sched_key, _ = _weekly_summary_keys(now, week)
+    if db.state_is_set(sched_key):
+        return _parse_due_at(db.state_get(sched_key))
+    close_dt = now.replace(hour=MARKET_CLOSE.hour, minute=MARKET_CLOSE.minute,
+                           second=0, microsecond=0)
+    due_at = close_dt + timedelta(hours=1)
+    db.state_set(sched_key, due_at.isoformat())
+    logger.info("*** Scheduled weekly summary for %s (durable) ***",
+                due_at.strftime("%Y-%m-%d %H:%M"))
+    return due_at
+
+
+def _fire_weekly_summary_if_due(now: datetime, week: int) -> bool:
+    """Off-hours catch-up. If this week is scheduled, not yet sent, and we're
+    past the firing time → send the summary and persist the 'sent' marker.
+    Restart-safe (schedule lives in the DB) and idempotent (sent marker).
+
+    Returns True if the week is handled (just sent, or already sent), so the
+    caller can stop polling it this process. Returns False if nothing was
+    scheduled, it isn't due yet, or the send failed (left to retry next pass)."""
+    sched_key, sent_key = _weekly_summary_keys(now, week)
+    if not db.state_is_set(sched_key):
+        return False                       # nothing scheduled for this week
+    if db.state_is_set(sent_key):
+        return True                        # idempotent — already sent
+    due_at = _parse_due_at(db.state_get(sched_key))
+    if due_at is not None and now < due_at:
+        return False                       # scheduled but not yet due
+    try:
+        logger.info("*** Sending post-close weekly summary (week %d) ***", week)
+        stats = strategy_engine.get_weekly_stats(week, now.isocalendar()[0])
+        if stats and stats.get("trades", 0) > 0:
+            telegram_bot.alert_weekly_summary(stats)
+        else:
+            logger.info("Weekly summary: no settled trades")
+        db.state_set(sent_key)             # mark sent BEFORE returning handled
+        return True
+    except Exception as we:
+        # Leave the scheduled marker in place so the next off-hours pass retries
+        # (strictly better than the old code, which dropped it and never retried).
+        logger.error("Weekly summary error: %s", we, exc_info=True)
+        return False
+
+
+# ------------------------------------------------------------------
 # Main loop
 # ------------------------------------------------------------------
 
@@ -269,38 +347,23 @@ def main():
                 if now.weekday() in TRADING_DAYS and now.time() > MARKET_CLOSE:
                     _archive_eod_snapshot(now.strftime("%Y-%m-%d"))
 
-                # Fire post-close weekly summary if due
-                if (weekly_summary_due_at is not None
-                        and now >= weekly_summary_due_at
-                        and weekly_summary_week != current_week):
-                    week_key = (f"weekly_summary_sent:"
-                                f"{now.isocalendar()[0]}-W{current_week:02d}")
-                    if db.state_is_set(week_key):
-                        logger.info(
-                            "Weekly summary already sent (state marker %s) — skipping",
-                            week_key)
+                # ── Weekly summary — durable catch-up (Bug 1 fix) ────────
+                # The schedule lives in pipeline_state, so this fires even if
+                # the worker restarted between Friday's close and the firing
+                # time. Idempotent via the 'sent' marker.
+                if weekly_summary_week != current_week:
+                    # Recover the firing time from the durable marker so a
+                    # post-restart process waits for it rather than sleeping to
+                    # the next market open.
+                    if weekly_summary_due_at is None:
+                        _sched_key, _sent_key = _weekly_summary_keys(now, current_week)
+                        if (db.state_is_set(_sched_key)
+                                and not db.state_is_set(_sent_key)):
+                            weekly_summary_due_at = _parse_due_at(
+                                db.state_get(_sched_key))
+                    if _fire_weekly_summary_if_due(now, current_week):
                         weekly_summary_week   = current_week
                         weekly_summary_due_at = None
-                    else:
-                        try:
-                            logger.info(
-                                "*** Sending post-close weekly summary "
-                                "(week %d, %d min after close) ***",
-                                current_week,
-                                int((now - weekly_summary_due_at).total_seconds() / 60),
-                            )
-                            stats = strategy_engine.get_weekly_stats(
-                                current_week, now.isocalendar()[0])
-                            if stats and stats.get("trades", 0) > 0:
-                                telegram_bot.alert_weekly_summary(stats)
-                            else:
-                                logger.info("Weekly summary: no settled trades")
-                            db.state_set(week_key)
-                            weekly_summary_week   = current_week
-                            weekly_summary_due_at = None
-                        except Exception as we:
-                            logger.error("Weekly summary error: %s", we, exc_info=True)
-                            weekly_summary_due_at = None  # don't retry-loop
 
                 # Decide how long to sleep
                 if weekly_summary_due_at is not None and now < weekly_summary_due_at:
@@ -486,16 +549,13 @@ def main():
                 last_day   = tase_api.is_last_trading_day_of_week(
                     now, last_known_expiries)
 
-                # Schedule weekly summary 1 hour after close
+                # Schedule weekly summary 1 hour after close — persisted to
+                # pipeline_state so the firing survives a restart (Bug 1 fix).
+                # _schedule_weekly_summary is idempotent (no-op if already set).
                 if (ok and last_cycle and last_day
-                        and weekly_summary_week != current_week
-                        and weekly_summary_due_at is None):
-                    close_dt = now.replace(
-                        hour=MARKET_CLOSE.hour, minute=MARKET_CLOSE.minute,
-                        second=0, microsecond=0)
-                    weekly_summary_due_at = close_dt + timedelta(hours=1)
-                    logger.info("*** Scheduled weekly summary for %s ***",
-                                weekly_summary_due_at.strftime("%Y-%m-%d %H:%M"))
+                        and weekly_summary_week != current_week):
+                    weekly_summary_due_at = _schedule_weekly_summary(
+                        now, current_week)
 
                 if ok and last_cycle:
                     # Weekly backup
