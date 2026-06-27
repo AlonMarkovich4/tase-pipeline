@@ -1009,7 +1009,7 @@ def settle_expiry(expiry_date_iso: str, tase_open_price: float = 0.0):
                 f"?expiry_date=eq.{expiry_date_iso}"
                 f"&result_status=not.is.null"
                 f"&select=interval_pct,short_put_strike,short_call_strike,"
-                f"actual_pnl_ils,result_status"
+                f"actual_pnl_ils,result_status,risk_reward_ratio,max_risk_ils"
                 f"&order=interval_pct"
             )
             rr = httpx.get(read_url, headers=_sc.headers(), timeout=15)
@@ -1027,6 +1027,8 @@ def settle_expiry(expiry_date_iso: str, tase_open_price: float = 0.0):
                     "short_call_strike": _clean_numeric(s.get("short_call_strike")),
                     "actual_pnl_ils":    _clean_numeric(s.get("_settled_pnl_ils", 0)),
                     "result_status":     s.get("_settled_status", ""),
+                    "risk_reward_ratio": _clean_numeric(s.get("risk_reward_ratio")),
+                    "max_risk_ils":      _clean_numeric(s.get("max_risk_ils")),
                 })
 
         entry_base = _clean_numeric(strategies[0].get("base_index_value", 0))
