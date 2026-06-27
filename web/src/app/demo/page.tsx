@@ -1,12 +1,17 @@
 import { getDemoBook, type DemoTrade } from "@/lib/data";
 import { Wallet, Trending, Target, Shield } from "@/components/icons";
 import DemoWeeks, { type Week } from "@/components/DemoWeeks";
+import { settleDueDemoTrades } from "./actions";
 
 const card = "rounded-2xl border border-border bg-surface/70 backdrop-blur";
 const ils = (n: number | null) =>
   n == null ? "—" : `${n < 0 ? "-" : ""}₪${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
 
 export default async function DemoPage() {
+  // Settle any expired demo positions before rendering. Atomic + idempotent, so
+  // calling it on every visit is safe (no double-count) — this is what lets us
+  // retire the Streamlit-only settlement. Failures here never block the page.
+  await settleDueDemoTrades();
   const book = await getDemoBook();
   const closed = book.trades.filter((t) => t.status === "closed");
   const wins = closed.filter((t) => (t.pnlIls ?? 0) > 0);
