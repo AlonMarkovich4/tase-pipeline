@@ -27,7 +27,7 @@ import telegram_bot
 from config import (
     TZ_ISRAEL, TASE_MULTIPLIER, WING_WIDTH, INTERVALS,
     DAY_NAMES_EN, DAY_NAMES_HE, PRICE_SANITY_MAX_PTS,
-    TA35_MIN, TA35_MAX,
+    TA35_MIN, TA35_MAX, PORTFOLIO_CAPITAL,
 )
 
 logger = logging.getLogger("tase_pipeline")
@@ -1153,4 +1153,8 @@ def get_weekly_stats(iso_week: int, iso_year: int = 0) -> dict:
         # Potential: best-₪ interval per expiry + the weekly sum of those.
         "potential_total":     potential_total,
         "potential_breakdown": potential_breakdown,
+        # Potential as % of the book on a single-lot basis (one lot per expiry
+        # vs PORTFOLIO_CAPITAL). Guarded against a zero/missing capital.
+        "potential_pct":       (potential_total / PORTFOLIO_CAPITAL * 100)
+                               if PORTFOLIO_CAPITAL else 0.0,
     }

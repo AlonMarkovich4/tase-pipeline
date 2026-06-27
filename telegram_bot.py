@@ -10,6 +10,8 @@ import logging
 
 import httpx
 
+from config import PORTFOLIO_CAPITAL
+
 logger = logging.getLogger("tase_pipeline")
 
 _token:   str = ""
@@ -303,11 +305,23 @@ def alert_weekly_summary(week_stats: dict):
     body = "\n".join(lines) if lines else "—"
     total_icon = "\U0001F4C8" if total >= 0 else "\U0001F4C9"
 
+    # % of the book, single-lot basis. Defensive: an older stats dict without
+    # `potential_pct` simply omits the line (won't crash the message).
+    pct = week_stats.get("potential_pct")
+    pct_line = ""
+    if pct is not None:
+        pct_icon = "\U0001F4C8" if pct >= 0 else "\U0001F4C9"
+        pct_line = (
+            f"{pct_icon} ≈ <code>{pct:+.2f}%</code> מהתיק "
+            f"(לוט בודד · תיק {PORTFOLIO_CAPITAL:,} ₪)\n"
+        )
+
     text = (
         f"\U0001F4CA <b>סיכום שבועי — TA-35</b>\n"
         f"━━━━━━━━━━━━━━━\n"
         f"\U0001F3C1 {n} פקיעות נסלקו השבוע\n\n"
         f"\U0001F4A1 רווח פוטנציאלי כולל: {total_icon} <code>{_fmt_ils(total)} ₪</code>\n"
+        f"{pct_line}"
         f"{body}\n\n"
         f"<i>פוטנציאלי — אילו פעלנו לפי המרווח הטוב בכל פקיעה; לא רווח ממומש.</i>"
     )
