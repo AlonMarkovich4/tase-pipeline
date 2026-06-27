@@ -423,13 +423,19 @@ def main():
                 cycle_result = tase_api.run_cycle(page, now)
                 ok           = cycle_result["ok"]
 
+                # Cache the freshest expiry list regardless of `ok`. The
+                # expiry-dates endpoint is independent of the (possibly stale)
+                # putvscall feed, so last-trading-day detection below stays
+                # accurate even on a stale-feed day (ok=False) — which is what
+                # lets the weekly summary schedule on the real last trading day.
+                cycle_expiries = cycle_result.get("expiry_dates") or []
+                if cycle_expiries:
+                    last_known_expiries = cycle_expiries
+
                 if ok:
                     daily_cycles  += 1
                     daily_rows    += cycle_result["rows"]
                     daily_expiries = max(daily_expiries, cycle_result["expiries"])
-                    cycle_expiries = cycle_result.get("expiry_dates") or []
-                    if cycle_expiries:
-                        last_known_expiries = cycle_expiries
 
                     # ── Data-quality monitoring ──
                     # Assess this cycle BEFORE adding it to the rolling
@@ -551,8 +557,13 @@ def main():
 
                 # Schedule weekly summary 1 hour after close — persisted to
                 # pipeline_state so the firing survives a restart (Bug 1 fix).
+                # Decoupled from cycle `ok`: the summary reports strategies that
+                # are ALREADY settled in the DB, so it must be scheduled on the
+                # last trading day even when today's feed is stale (ok=False).
+                # Otherwise a stale-feed last day leaves no `scheduled` marker
+                # and the off-hours catch-up has nothing to fire from.
                 # _schedule_weekly_summary is idempotent (no-op if already set).
-                if (ok and last_cycle and last_day
+                if (last_cycle and last_day
                         and weekly_summary_week != current_week):
                     weekly_summary_due_at = _schedule_weekly_summary(
                         now, current_week)
